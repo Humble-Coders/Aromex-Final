@@ -408,6 +408,9 @@ struct MainContentView: View {
                             ipadIsUpdating: $ipadIsUpdating,
                             balanceViewModel: balanceViewModel
                         )
+                        
+                        // Quick Actions Section
+                        QuickActionsView()
                     }
                 }
             }
@@ -1490,6 +1493,147 @@ struct EditBalanceDialog: View {
         formatter.currencyCode = "USD"
         return formatter.string(from: NSNumber(value: amount)) ?? "$0.00"
     }
-    
+}
 
+// Quick Actions Section
+struct QuickActionsView: View {
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
+    @Environment(\.verticalSizeClass) var verticalSizeClass
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            // Section Title
+            HStack {
+                Text("Quick Actions")
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.primary)
+                Spacer()
+            }
+            .padding(.horizontal, 30)
+            
+            // Action Buttons
+            if horizontalSizeClass == .compact && verticalSizeClass == .regular {
+                // iPhone Portrait - Vertical stack
+                VStack(spacing: 12) {
+                    QuickActionButton(
+                        title: "Add Customer",
+                        icon: "person.badge.plus",
+                        color: Color(red: 0.25, green: 0.33, blue: 0.54)
+                    )
+                    QuickActionButton(
+                        title: "Add Supplier",
+                        icon: "building.2",
+                        color: Color(red: 0.20, green: 0.60, blue: 0.40)
+                    )
+                    QuickActionButton(
+                        title: "Add Middleman",
+                        icon: "person.2",
+                        color: Color(red: 0.80, green: 0.40, blue: 0.20)
+                    )
+                    QuickActionButton(
+                        title: "Add Product",
+                        icon: "iphone",
+                        color: Color(red: 0.60, green: 0.20, blue: 0.80)
+                    )
+                    QuickActionButton(
+                        title: "Add Expense",
+                        icon: "minus.circle",
+                        color: Color(red: 0.90, green: 0.30, blue: 0.30)
+                    )
+                }
+                .padding(.horizontal, 20)
+            } else {
+                // macOS/iPad - Grid layout
+                LazyVGrid(columns: [
+                    GridItem(.flexible(), spacing: 15),
+                    GridItem(.flexible(), spacing: 15),
+                    GridItem(.flexible(), spacing: 15)
+                ], spacing: 15) {
+                    QuickActionButton(
+                        title: "Add Customer",
+                        icon: "person.badge.plus",
+                        color: Color(red: 0.25, green: 0.33, blue: 0.54)
+                    )
+                    QuickActionButton(
+                        title: "Add Supplier",
+                        icon: "building.2",
+                        color: Color(red: 0.20, green: 0.60, blue: 0.40)
+                    )
+                    QuickActionButton(
+                        title: "Add Middleman",
+                        icon: "person.2",
+                        color: Color(red: 0.80, green: 0.40, blue: 0.20)
+                    )
+                    QuickActionButton(
+                        title: "Add Product",
+                        icon: "iphone",
+                        color: Color(red: 0.60, green: 0.20, blue: 0.80)
+                    )
+                    QuickActionButton(
+                        title: "Add Expense",
+                        icon: "minus.circle",
+                        color: Color(red: 0.90, green: 0.30, blue: 0.30)
+                    )
+                }
+                .padding(.horizontal, 30)
+            }
+        }
+    }
+}
+
+// Individual Quick Action Button
+struct QuickActionButton: View {
+    let title: String
+    let icon: String
+    let color: Color
+    
+    var body: some View {
+        Button(action: {
+            // TODO: Add functionality
+        }) {
+            HStack(spacing: 12) {
+                // Icon with background
+                ZStack {
+                    Circle()
+                        .fill(color.opacity(0.15))
+                        .frame(width: 44, height: 44)
+                    
+                    Image(systemName: icon)
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundColor(color)
+                }
+                
+                // Title
+                Text(title)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.primary)
+                    .multilineTextAlignment(.leading)
+                
+                Spacer()
+                
+                // Arrow indicator
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(.background)
+                    .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: 5)
+            )
+        }
+        .buttonStyle(PlainButtonStyle())
+        .onHover { isHovering in
+            #if os(macOS)
+            if isHovering {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
+            #endif
+        }
+    }
 }

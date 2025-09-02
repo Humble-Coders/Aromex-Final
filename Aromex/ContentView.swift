@@ -3,7 +3,7 @@
 //  Aromex
 //
 //  Created by Ansh Bajaj on 29/08/25.
-//
+// check check
 
 import SwiftUI
 import FirebaseFirestore
@@ -19,6 +19,7 @@ struct ContentView: View {
     @State private var ipadIsUpdating = false
     @State private var ipadEditValue: String = ""
     @StateObject private var balanceViewModel = BalanceViewModel()
+    @FocusState private var isIPadFieldFocused: Bool
     
     var isIPad: Bool {
         #if os(iOS)
@@ -87,7 +88,22 @@ struct ContentView: View {
                     .font(.system(size: 16, weight: .medium))
                     #if os(iOS)
                     .keyboardType(.decimalPad)
+                    .focused($isIPadFieldFocused)
                     #endif
+                    .onChange(of: ipadEditValue) { newValue in
+                        if ipadEditingField == .creditCard {
+                            // For credit card, add negative sign only if value is not 0 or empty
+                            if !newValue.isEmpty {
+                                let numericValue = Double(newValue) ?? 0
+                                if numericValue != 0 && !newValue.hasPrefix("-") {
+                                    ipadEditValue = "-" + newValue
+                                } else if numericValue == 0 && newValue.hasPrefix("-") {
+                                    // Remove negative sign if value is 0
+                                    ipadEditValue = String(newValue.dropFirst())
+                                }
+                            }
+                        }
+                    }
                 
                 // Action buttons
                 HStack(spacing: 12) {
@@ -155,6 +171,11 @@ struct ContentView: View {
         )
         .onAppear {
             ipadEditValue = getCurrentBalanceString()
+            #if os(iOS)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                isIPadFieldFocused = true
+            }
+            #endif
         }
     }
     
@@ -1029,6 +1050,7 @@ struct EditBalanceDialog: View {
     let onSave: (String) -> Void
     
     @State private var editValue: String = ""
+    @FocusState private var isFieldFocused: Bool
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     @Environment(\.verticalSizeClass) var verticalSizeClass
@@ -1060,6 +1082,11 @@ struct EditBalanceDialog: View {
         }
         .onAppear {
             editValue = currentValue
+            #if os(iOS)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                isFieldFocused = true
+            }
+            #endif
         }
     }
     
@@ -1131,8 +1158,23 @@ struct EditBalanceDialog: View {
                         .textFieldStyle(PlainTextFieldStyle())
                         #if os(iOS)
                         .keyboardType(.decimalPad)
+                        .focused($isFieldFocused)
                         #endif
                         .font(.system(size: 22, weight: .semibold, design: .rounded))
+                        .onChange(of: editValue) { newValue in
+                            if field == .creditCard {
+                                // For credit card, add negative sign only if value is not 0 or empty
+                                if !newValue.isEmpty {
+                                    let numericValue = Double(newValue) ?? 0
+                                    if numericValue != 0 && !newValue.hasPrefix("-") {
+                                        editValue = "-" + newValue
+                                    } else if numericValue == 0 && newValue.hasPrefix("-") {
+                                        // Remove negative sign if value is 0
+                                        editValue = String(newValue.dropFirst())
+                                    }
+                                }
+                            }
+                        }
                         .foregroundColor(.primary)
                         .padding(.horizontal, 20)
                         .padding(.vertical, 16)
@@ -1309,7 +1351,24 @@ struct EditBalanceDialog: View {
                     VStack(spacing: 16) {
                         TextField("0.00", text: $editValue)
                             .textFieldStyle(PlainTextFieldStyle())
+                            #if os(iOS)
+                            .focused($isFieldFocused)
+                            #endif
                             .font(.system(size: 26, weight: .semibold, design: .rounded))
+                            .onChange(of: editValue) { newValue in
+                                if field == .creditCard {
+                                    // For credit card, add negative sign only if value is not 0 or empty
+                                    if !newValue.isEmpty {
+                                        let numericValue = Double(newValue) ?? 0
+                                        if numericValue != 0 && !newValue.hasPrefix("-") {
+                                            editValue = "-" + newValue
+                                        } else if numericValue == 0 && newValue.hasPrefix("-") {
+                                            // Remove negative sign if value is 0
+                                            editValue = String(newValue.dropFirst())
+                                        }
+                                    }
+                                }
+                            }
                             .foregroundColor(.primary)
                             .multilineTextAlignment(.leading)
                             .padding(.horizontal, 24)

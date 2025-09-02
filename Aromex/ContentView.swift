@@ -3,7 +3,7 @@
 //  Aromex
 //
 //  Created by Ansh Bajaj on 29/08/25.
-// check check
+// check check 2
 
 import SwiftUI
 import FirebaseFirestore
@@ -1300,6 +1300,15 @@ struct EditBalanceDialog: View {
                         .clipShape(Circle())
                 }
                 .buttonStyle(PlainButtonStyle())
+                .onHover { isHovering in
+                    #if os(macOS)
+                    if isHovering {
+                        NSCursor.pointingHand.push()
+                    } else {
+                        NSCursor.pop()
+                    }
+                    #endif
+                }
             }
             .padding(.horizontal, 36)
             .padding(.top, 36)
@@ -1407,6 +1416,15 @@ struct EditBalanceDialog: View {
                     .buttonStyle(PlainButtonStyle())
                     .disabled(isUpdating)
                     .opacity(isUpdating ? 0.6 : 1.0)
+                    .onHover { isHovering in
+                        #if os(macOS)
+                        if isHovering {
+                            NSCursor.pointingHand.push()
+                        } else {
+                            NSCursor.pop()
+                        }
+                        #endif
+                    }
                     
                     Button(action: {
                         onSave(editValue)
@@ -1443,6 +1461,15 @@ struct EditBalanceDialog: View {
                     .buttonStyle(PlainButtonStyle())
                     .disabled(isUpdating || editValue.isEmpty)
                     .opacity((isUpdating || editValue.isEmpty) ? 0.7 : 1.0)
+                    .onHover { isHovering in
+                        #if os(macOS)
+                        if isHovering {
+                            NSCursor.pointingHand.push()
+                        } else {
+                            NSCursor.pop()
+                        }
+                        #endif
+                    }
                 }
                 .padding(.bottom, 12)
             }

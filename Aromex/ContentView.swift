@@ -34,6 +34,15 @@ struct ContentView: View {
     @State private var supplierButtonFrame: CGRect = .zero
     @State private var allEntities: [EntityWithType] = []
     @State private var supplierSearchText: String = ""
+    @State private var entityFetchError = false
+    @State private var retryFetchEntities: (() -> Void) = {}
+    
+    // Scanner state
+    @State private var showingScanner = false
+    
+    // Bill screen state
+    @State private var showingBillScreen = false
+    @State private var billPurchaseId: String = ""
     
     var isIPad: Bool {
         #if os(iOS)
@@ -107,7 +116,9 @@ struct ContentView: View {
                     selectedSupplier: $selectedSupplier,
                     entities: allEntities,
                     buttonFrame: supplierButtonFrame,
-                    searchText: supplierSearchText
+                    searchText: supplierSearchText,
+                    entityFetchError: entityFetchError,
+                    onRetry: retryFetchEntities
                 )
             }
         }
@@ -115,6 +126,11 @@ struct ContentView: View {
             AddCustomerDialog(
                 isPresented: $showingAddCustomerDialog
             )
+        }
+        .onChange(of: showingBillScreen) { isShowing in
+            if isShowing {
+                selectedMenuItem = "Bill"
+            }
         }
     }
     
@@ -296,20 +312,34 @@ struct ContentView: View {
         NavigationSplitView {
             SidebarView(selectedMenuItem: $selectedMenuItem)
         } detail: {
-            MainContentView(
-                selectedMenuItem: selectedMenuItem,
-                ipadEditingField: $ipadEditingField,
-                ipadIsUpdating: $ipadIsUpdating,
-                balanceViewModel: balanceViewModel,
-                showingAddCustomerDialog: $showingAddCustomerDialog,
-                isDeletingEntity: $isDeletingEntity,
-                showDeleteEntitySuccess: $showDeleteEntitySuccess,
-                showingSupplierDropdown: $showingSupplierDropdown,
-                selectedSupplier: $selectedSupplier,
-                supplierButtonFrame: $supplierButtonFrame,
-                allEntities: $allEntities,
-                supplierSearchText: $supplierSearchText
-            )
+            if selectedMenuItem == "Bill" {
+                BillScreen(purchaseId: billPurchaseId, onClose: { 
+                    selectedMenuItem = "Home"
+                    showingBillScreen = false
+                })
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea(.all)
+            } else {
+                MainContentView(
+                    selectedMenuItem: $selectedMenuItem,
+                    ipadEditingField: $ipadEditingField,
+                    ipadIsUpdating: $ipadIsUpdating,
+                    balanceViewModel: balanceViewModel,
+                    showingAddCustomerDialog: $showingAddCustomerDialog,
+                    isDeletingEntity: $isDeletingEntity,
+                    showDeleteEntitySuccess: $showDeleteEntitySuccess,
+                    showingSupplierDropdown: $showingSupplierDropdown,
+                    selectedSupplier: $selectedSupplier,
+                    supplierButtonFrame: $supplierButtonFrame,
+                    allEntities: $allEntities,
+                    supplierSearchText: $supplierSearchText,
+                    entityFetchError: $entityFetchError,
+                    retryFetchEntities: $retryFetchEntities,
+                    showingScanner: $showingScanner,
+                    showingBillScreen: $showingBillScreen,
+                    billPurchaseId: $billPurchaseId
+                )
+            }
         }
         .navigationSplitViewStyle(.balanced)
     }
@@ -318,7 +348,7 @@ struct ContentView: View {
         #if os(iOS)
         NavigationStack {
             MainContentView(
-                selectedMenuItem: selectedMenuItem,
+                selectedMenuItem: $selectedMenuItem,
                 ipadEditingField: $ipadEditingField,
                 ipadIsUpdating: $ipadIsUpdating,
                 balanceViewModel: balanceViewModel,
@@ -329,7 +359,12 @@ struct ContentView: View {
                 selectedSupplier: $selectedSupplier,
                 supplierButtonFrame: $supplierButtonFrame,
                 allEntities: $allEntities,
-                supplierSearchText: $supplierSearchText
+                supplierSearchText: $supplierSearchText,
+                entityFetchError: $entityFetchError,
+                retryFetchEntities: $retryFetchEntities,
+                showingScanner: $showingScanner,
+                showingBillScreen: $showingBillScreen,
+                billPurchaseId: $billPurchaseId
             )
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -363,14 +398,22 @@ struct ContentView: View {
 struct SidebarView: View {
     @Binding var selectedMenuItem: String
     
-    let menuItems = [
-        ("Home", "house"),
-        ("Purchase", "cart"),
-        ("Sales", "chart.line.uptrend.xyaxis"),
-        ("Profiles", "person.3"),
-        ("Inventory", "archivebox"),
-        ("Statistics", "chart.bar")
-    ]
+    var menuItems: [(String, String)] {
+        var items: [(String, String)] = [
+            ("Home", "house"),
+            ("Purchase", "cart"),
+            ("Sales", "chart.line.uptrend.xyaxis"),
+            ("Profiles", "person.3"),
+            ("Inventory", "archivebox")
+        ]
+        
+        #if os(iOS)
+        items.append(("Scanner", "camera"))
+        #endif
+        
+        items.append(("Statistics", "chart.bar"))
+        return items
+    }
     
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -444,7 +487,7 @@ struct MenuItemView: View {
 }
 
 struct MainContentView: View {
-    let selectedMenuItem: String
+    @Binding var selectedMenuItem: String
     @Binding var ipadEditingField: AccountBalanceCard.BalanceField?
     @Binding var ipadIsUpdating: Bool
     @ObservedObject var balanceViewModel: BalanceViewModel
@@ -456,6 +499,11 @@ struct MainContentView: View {
     @Binding var supplierButtonFrame: CGRect
     @Binding var allEntities: [EntityWithType]
     @Binding var supplierSearchText: String
+    @Binding var entityFetchError: Bool
+    @Binding var retryFetchEntities: (() -> Void)
+    @Binding var showingScanner: Bool
+    @Binding var showingBillScreen: Bool
+    @Binding var billPurchaseId: String
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     @Environment(\.verticalSizeClass) var verticalSizeClass
     
@@ -490,37 +538,66 @@ struct MainContentView: View {
 //            }
             
             // Main Content Area
-            ScrollView {
-                VStack(alignment: .leading, spacing: 25) {
-                    Spacer()
-                    // Financial Overview Cards
-                    if selectedMenuItem == "Home" {
-                        FinancialOverviewView(
-                            ipadEditingField: $ipadEditingField,
-                            ipadIsUpdating: $ipadIsUpdating,
-                            balanceViewModel: balanceViewModel
-                        )
-                        
-                        // Quick Actions Section
-                        QuickActionsView(showingAddCustomerDialog: $showingAddCustomerDialog)
-                    } else if selectedMenuItem == "Profiles" {
-                        ProfilesView(
-                            isDeletingEntity: $isDeletingEntity,
-                            showDeleteEntitySuccess: $showDeleteEntitySuccess
-                        )
-                    } else if selectedMenuItem == "Purchase" {
-                        PurchaseView(
-                            showingSupplierDropdown: $showingSupplierDropdown,
-                            selectedSupplier: $selectedSupplier,
-                            supplierButtonFrame: $supplierButtonFrame,
-                            allEntities: $allEntities,
-                            supplierSearchText: $supplierSearchText
-                        )
+            Group {
+                if selectedMenuItem == "Scanner" {
+                    #if os(iOS)
+                    ScannerView(onClose: { selectedMenuItem = "Home" })
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .ignoresSafeArea()
+                    #else
+                    Text("Scanner is only available on iOS devices")
+                        .font(.title2)
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    #endif
+                } else if selectedMenuItem == "Bill" {
+                    BillScreen(purchaseId: billPurchaseId, onClose: { 
+                        selectedMenuItem = "Home"
+                        showingBillScreen = false
+                    })
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .ignoresSafeArea(.all)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 25) {
+                            Spacer()
+                            // Financial Overview Cards
+                            if selectedMenuItem == "Home" {
+                                FinancialOverviewView(
+                                    ipadEditingField: $ipadEditingField,
+                                    ipadIsUpdating: $ipadIsUpdating,
+                                    balanceViewModel: balanceViewModel
+                                )
+                                
+                                // Quick Actions Section
+                                QuickActionsView(showingAddCustomerDialog: $showingAddCustomerDialog)
+                            } else if selectedMenuItem == "Profiles" {
+                                ProfilesView(
+                                    isDeletingEntity: $isDeletingEntity,
+                                    showDeleteEntitySuccess: $showDeleteEntitySuccess
+                                )
+                            } else if selectedMenuItem == "Purchase" {
+                                PurchaseView(
+                                    showingSupplierDropdown: $showingSupplierDropdown,
+                                    selectedSupplier: $selectedSupplier,
+                                    supplierButtonFrame: $supplierButtonFrame,
+                                    allEntities: $allEntities,
+                                    supplierSearchText: $supplierSearchText,
+                                    entityFetchError: $entityFetchError,
+                                    retryFetchEntities: $retryFetchEntities,
+                                    onPaymentConfirmed: { purchaseId in
+                                        print("📱 Received purchase ID in callback: \(purchaseId)")
+                                        billPurchaseId = purchaseId
+                                        showingBillScreen = true
+                                    }
+                                )
+                            }
+                        }
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(.regularMaterial)
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(.regularMaterial)
         }
         .navigationTitle(selectedMenuItem)
     }
@@ -877,6 +954,7 @@ struct MobileSidebarView: View {
         ("Sales", "chart.line.uptrend.xyaxis"),
         ("Profiles", "person.3"),
         ("Inventory", "archivebox"),
+        ("Scanner", "camera"),
         ("Statistics", "chart.bar")
     ]
     

@@ -11,19 +11,15 @@ import AVFoundation
 import Vision
 #if os(iOS)
 import UIKit
-typealias KeyboardType = UIKeyboardType
 #else
 import AppKit
-enum KeyboardType {
-    case `default`
-    case numberPad
-    case decimalPad
-}
 #endif
 
 struct AddProductDialog: View {
     @Binding var isPresented: Bool
     let onDismiss: (() -> Void)?
+    let onSave: (([PhoneItem]) -> Void)?
+    
     
     // Brand dropdown state
     @State private var brandSearchText = ""
@@ -55,8 +51,20 @@ struct AddProductDialog: View {
     @FocusState private var isCarrierFocused: Bool
     @State private var carrierInternalSearchText = "" // Internal search for dropdown filtering
     
-    // Color text field state
+    // Color dropdown state
+    @State private var colors: [String] = []
+    @State private var isLoadingColors = false
     @FocusState private var isColorFocused: Bool
+    @State private var colorSearchText = "" // Display text in the field
+    @State private var colorInternalSearchText = "" // Internal search for dropdown filtering
+    
+    // Color dropdown state
+    @State private var showingColorDropdown = false
+    @State private var colorButtonFrame: CGRect = .zero
+    
+    // Capacity dropdown state
+    @State private var showingCapacityDropdown = false
+    @State private var capacityButtonFrame: CGRect = .zero
     
     // Status dropdown state (hardcoded options)
     @State private var showingStatusDropdown = false
@@ -74,13 +82,18 @@ struct AddProductDialog: View {
     @FocusState private var isStorageLocationFocused: Bool
     @State private var storageLocationInternalSearchText = "" // Internal search for dropdown filtering
     
-    // Focus management for Next button navigation
+    // Capacity dropdown state
+    @State private var capacities: [String] = []
+    @State private var isLoadingCapacities = false
     @FocusState private var isCapacityFocused: Bool
+    @State private var capacitySearchText = "" // Display text in the field
+    @State private var capacityInternalSearchText = "" // Internal search for dropdown filtering
     @FocusState private var isImeiFocused: Bool
     @FocusState private var isPriceFocused: Bool
     
     // Confirmation overlay
     @State private var showingConfirmation = false
+    @State private var showingCloseConfirmation = false
     @State private var confirmationMessage = ""
     
     // Loading overlay
@@ -88,6 +101,8 @@ struct AddProductDialog: View {
     @State private var isAddingModel = false
     @State private var isAddingCarrier = false
     @State private var isAddingStorageLocation = false
+    @State private var isAddingColor = false
+    @State private var isAddingCapacity = false
     
     // Camera and barcode scanning
     @State private var showingCameraView = false
@@ -95,12 +110,126 @@ struct AddProductDialog: View {
     
     // Other fields (non-functional for now)
     @State private var capacity = ""
+    @State private var capacityUnit = "GB" // Default to GB, options: GB, TB
     @State private var imeiSerial = ""
+    @State private var storedImeis: [String] = []
+    @State private var showingImeiDropdown = false
+    @State private var imeiButtonFrame: CGRect = .zero
+    @State private var showingDeleteConfirmation = false
+    @State private var imeiToDelete: String = ""
+    @State private var imeiSearchText = ""
+    @State private var imeiInternalSearchText = ""
+    
+    // macOS barcode listener state
+    #if os(macOS)
+    @State private var barcodeListener: ListenerRegistration?
+    @State private var showBarcodeAddedConfirmation = false
+    @State private var addedBarcode = ""
+    #endif
+    
+    // IMEI validation state
+    @State private var isCheckingImei = false
+    @State private var showImeiDuplicateAlert = false
+    @State private var duplicateImeiMessage = ""
+    @State private var showImeiValidationAlert = false
+    @State private var imeiValidationMessage = ""
+    
     @State private var color = ""
     @State private var selectedStatus = "Active"
     @State private var price = ""
     
     @Environment(\.colorScheme) var colorScheme
+    
+    // Check if form has any data
+    private var hasFormData: Bool {
+        return !selectedBrand.isEmpty ||
+               !selectedModel.isEmpty ||
+               !selectedCarrier.isEmpty ||
+               !selectedStorageLocation.isEmpty ||
+               !imeiSerial.isEmpty ||
+               !storedImeis.isEmpty ||
+               !capacity.isEmpty ||
+               !color.isEmpty ||
+               !price.isEmpty ||
+               selectedStatus != "Active"
+    }
+    
+    // Enable Add Product when required fields are valid (macOS and desktop UI)
+    private var isAddEnabled: Bool {
+        let hasBrand = !selectedBrand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasModel = !selectedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasCapacity = !capacity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasStorage = !selectedStorageLocation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let priceValue = Double(price.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        let hasValidPrice = priceValue > 0
+        return hasBrand && hasModel && hasCapacity && hasStorage && hasValidPrice
+    }
+    
+    // Background gradient for iPhone dialog
+    private var backgroundGradient: Gradient {
+        #if os(iOS)
+        return Gradient(colors: [Color(.systemBackground), Color(.systemGray6).opacity(0.3)])
+        #else
+        return Gradient(colors: [Color(NSColor.controlBackgroundColor), Color(NSColor.controlColor).opacity(0.3)])
+        #endif
+    }
+    
+    // Platform-specific colors for form fields
+    private var formFieldBackgroundColor: Color {
+        #if os(iOS)
+        return Color(.systemBackground)
+        #else
+        return Color(NSColor.controlBackgroundColor)
+        #endif
+    }
+    
+    private var formFieldBorderColor: Color {
+        #if os(iOS)
+        return Color(.systemGray4)
+        #else
+        return Color(NSColor.separatorColor)
+        #endif
+    }
+    
+    private func handleCloseAction() {
+        if hasFormData {
+            showingCloseConfirmation = true
+        } else {
+            closeDialog()
+        }
+    }
+    
+    private func closeDialog() {
+        isPresented = false
+        onDismiss?()
+    }
+    
+    private func handleSaveAndClose() {
+        // Validate IMEI before saving - must be stored in dropdown (storedImeis array)
+        if storedImeis.isEmpty {
+            imeiValidationMessage = "Please add at least one IMEI/Serial number by clicking the checkmark button before saving the product."
+            showImeiValidationAlert = true
+            return
+        }
+        
+        // Build PhoneItem from current form fields
+        let unitCost = Double(price) ?? 0.0
+        let phone = PhoneItem(
+            brand: selectedBrand,
+            model: selectedModel,
+            capacity: capacity,
+            capacityUnit: capacityUnit,
+            color: color,
+            carrier: selectedCarrier,
+            status: selectedStatus,
+            storageLocation: selectedStorageLocation,
+            imeis: storedImeis,
+            unitCost: unitCost
+        )
+        onSave?([phone])
+        isPresented = false
+        onDismiss?()
+    }
     
     var shouldShowiPhoneDialog: Bool {
         #if os(iOS)
@@ -120,20 +249,46 @@ struct AddProductDialog: View {
     
     var iPhoneDialogView: some View {
         ZStack {
+            // Professional background with gradient
+            LinearGradient(
+                gradient: backgroundGradient,
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+            
             NavigationView {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        VStack(spacing: 24) {
-                        
-                        
-                        // Form fields
-                        iPhoneFormFields
-                        
-                        Spacer(minLength: 20)
+                        VStack(spacing: 0) {
+                            // Professional header section
+                            VStack(spacing: 16) {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Text("Add New Product")
+                                            .font(.largeTitle)
+                                            .fontWeight(.bold)
+                                            .foregroundColor(.primary)
+                                        
+                                        Text("Enter product details to add to inventory")
+                                            .font(.subheadline)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 24)
+                                .padding(.top, 20)
+                            }
+                            .padding(.bottom, 32)
+                            
+                            // Form fields with professional spacing
+                            VStack(spacing: 28) {
+                                iPhoneFormFields
+                            }
+                            .padding(.horizontal, 24)
+                            .padding(.bottom, 40)
+                        }
                     }
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 100)
-                }
                 .onChange(of: isCapacityFocused) { focused in
                     if focused {
                         withAnimation(.easeInOut(duration: 0.5)) {
@@ -201,48 +356,59 @@ struct AddProductDialog: View {
                 .navigationTitle("Add Product")
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
+                .toolbar(content: {
                     ToolbarItem(placement: .navigationBarLeading) {
                         Button("Cancel") {
-                            isPresented = false
-                            onDismiss?()
+                            handleCloseAction()
                         }
+                        .font(.system(size: 17, weight: .regular))
+                        .foregroundColor(.blue)
                     }
                     ToolbarItem(placement: .navigationBarTrailing) {
-                        Button("Add Product") {
-                            // Non-functional for now
+                        Button("Save") {
+                            handleSaveAndClose()
                         }
-                        .fontWeight(.semibold)
-                        .disabled(true)
-                        .foregroundColor(.gray)
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundColor(.blue)
+                        .disabled(!isAddEnabled)
                     }
-                    ToolbarItemGroup(placement: .keyboard) {
-                        Spacer()
-                        Button(isStorageLocationFocused ? "Add Product" : "Next") {
-                            if isStorageLocationFocused {
-                                // Add Product functionality (same as main button)
-                                // For now, just dismiss the dialog since the main button is non-functional
-                                isPresented = false
-                                onDismiss?()
-                            } else {
-                                // Navigate to next field based on current focus
-                                if isBrandFocused {
-                                    isModelFocused = true
-                                } else if isModelFocused {
-                                    isCapacityFocused = true
-                                } else if isCapacityFocused {
-                                    isImeiFocused = true
-                                } else if isImeiFocused {
-                                    isCarrierFocused = true
-                                } else if isCarrierFocused {
-                                    isColorFocused = true
-                                } else if isColorFocused {
-                                    isPriceFocused = true
-                                } else if isPriceFocused {
-                                    isStorageLocationFocused = true
+                })
+                .safeAreaInset(edge: .bottom) {
+                    if isBrandFocused || isModelFocused || isCapacityFocused || isImeiFocused || isCarrierFocused || isColorFocused || isPriceFocused || isStatusFocused || isStorageLocationFocused {
+                        HStack {
+                            Spacer()
+                            Button(isStorageLocationFocused ? "Add Product" : "Next") {
+                                if isStorageLocationFocused {
+                                    // Save and close
+                                    if isAddEnabled {
+                                        handleSaveAndClose()
+                                    }
+                                } else {
+                                    // Navigate to next field based on current focus
+                                    if isBrandFocused {
+                                        isModelFocused = true
+                                    } else if isModelFocused {
+                                        isCapacityFocused = true
+                                    } else if isCapacityFocused {
+                                        isImeiFocused = true
+                                    } else if isImeiFocused {
+                                        isCarrierFocused = true
+                                    } else if isCarrierFocused {
+                                        isColorFocused = true
+                                    } else if isColorFocused {
+                                        isPriceFocused = true
+                                    } else if isStatusFocused {
+                                        isPriceFocused = true
+                                    } else if isPriceFocused {
+                                        isStorageLocationFocused = true
+                                    }
                                 }
                             }
+                            .padding()
+                            .disabled(isStorageLocationFocused && !isAddEnabled)
+                            .opacity(isStorageLocationFocused && !isAddEnabled ? 0.7 : 1.0)
                         }
+                        .background(Color(.systemBackground))
                     }
                 }
                 #endif
@@ -251,32 +417,35 @@ struct AddProductDialog: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
-                        isPresented = false
-                        onDismiss?()
+                        handleCloseAction()
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add Product") {
-                        // Non-functional for now
+                        handleSaveAndClose()
                     }
                     .fontWeight(.semibold)
-                    .disabled(true)
+                    .disabled(!isAddEnabled)
                 }
             }
             #endif
         .onAppear {
-            print("iPhoneDialogView appeared - fetching brands, carriers, and storage locations")
+            print("iPhoneDialogView appeared - fetching brands, carriers, storage locations, colors, and capacities")
             fetchPhoneBrands()
             fetchCarriers()
             fetchStorageLocations()
+            fetchColors()
+            fetchCapacities()
         }
         .onChange(of: selectedBrand) { newBrand in
+            // Clear model field whenever brand changes
+            selectedModel = ""
+            modelSearchText = ""
+            
             if !newBrand.isEmpty {
                 fetchPhoneModels()
             } else {
                 phoneModels = []
-                selectedModel = ""
-                modelSearchText = ""
             }
         }
             
@@ -289,17 +458,50 @@ struct AddProductDialog: View {
             if showingConfirmation {
                 confirmationOverlay
             }
+            
+            // (Removed) IMEI overlay – now inline like other dropdowns
         }
         .sheet(isPresented: $showingCameraView) {
             CameraView(imeiText: $imeiSerial)
         }
+        #if os(iOS)
         .sheet(isPresented: $showingiPhoneBarcodeScanner) {
-            iPhoneBarcodeScannerSheet(imeiText: $imeiSerial)
+            iPhoneBarcodeScannerSheet(imeiText: $imeiSerial, storedImeis: $storedImeis)
+        }
+        #endif
+        .alert("Delete IMEI", isPresented: $showingDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                if let index = storedImeis.firstIndex(of: imeiToDelete) {
+                    storedImeis.remove(at: index)
+                }
+                imeiToDelete = ""
+            }
+        } message: {
+            Text("Are you sure you want to delete this IMEI? This action cannot be undone.")
+        }
+        .alert("Discard Changes", isPresented: $showingCloseConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Discard", role: .destructive) {
+                closeDialog()
+            }
+        } message: {
+            Text("You have unsaved changes. Are you sure you want to discard them?")
+        }
+        .alert("IMEI Already Exists", isPresented: $showImeiDuplicateAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(duplicateImeiMessage)
+        }
+        .alert("IMEI Required", isPresented: $showImeiValidationAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(imeiValidationMessage)
         }
     }
     
     private var iPhoneFormFields: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 24) {
             // Brand field (functional)
             brandField
                 .id("brand")
@@ -309,34 +511,20 @@ struct AddProductDialog: View {
                 .id("model")
             
             // Capacity field (functional)
-            formField(
-                title: "Capacity (GB)",
-                isRequired: true,
-                placeholder: "Enter capacity in GB",
-                text: $capacity,
-                isEnabled: true,
-                focus: $isCapacityFocused,
-                fieldId: "capacity",
-                keyboardType: .numberPad
-            )
+            capacityField
+                .id("capacity")
             
              // IMEI/Serial field with camera button
              imeiField
+                .id("imei")
             
             // Carrier field (functional)
             carrierField
                 .id("carrier")
             
             // Color field (functional)
-            formField(
-                title: "Color",
-                isRequired: true,
-                placeholder: "Enter color",
-                text: $color,
-                isEnabled: true,
-                focus: $isColorFocused,
-                fieldId: "color"
-            )
+            colorField
+                .id("color")
             
             // Status field (functional)
             statusField
@@ -376,25 +564,73 @@ struct AddProductDialog: View {
         .overlay(desktopBrandDropdownOverlay)
         .overlay(desktopModelDropdownOverlay)
         .overlay(desktopCarrierDropdownOverlay)
+        .overlay(desktopColorDropdownOverlay)
+        .overlay(desktopCapacityDropdownOverlay)
         .overlay(desktopStatusDropdownOverlay)
         .overlay(desktopStorageLocationDropdownOverlay)
+        .overlay(desktopImeiDropdownOverlay)
+        #if os(macOS)
+        .overlay(desktopBarcodeConfirmationOverlay)
+        #endif
         .onAppear {
-            print("DesktopDialogView appeared - fetching brands, carriers, and storage locations")
+            print("DesktopDialogView appeared - fetching brands, carriers, storage locations, colors, and capacities")
             fetchPhoneBrands()
             fetchCarriers()
             fetchStorageLocations()
+            fetchColors()
+            fetchCapacities()
+            
+            #if os(macOS)
+            setupBarcodeListener()
+            #endif
+        }
+        .onDisappear {
+            #if os(macOS)
+            cleanupBarcodeListener()
+            #endif
         }
         .onChange(of: selectedBrand) { newBrand in
+            // Clear model field whenever brand changes
+            selectedModel = ""
+            modelSearchText = ""
+            
             if !newBrand.isEmpty {
                 fetchPhoneModels()
             } else {
                 phoneModels = []
-                selectedModel = ""
-                modelSearchText = ""
             }
         }
         .sheet(isPresented: $showingCameraView) {
             CameraView(imeiText: $imeiSerial)
+        }
+        .alert("Delete IMEI", isPresented: $showingDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                if let index = storedImeis.firstIndex(of: imeiToDelete) {
+                    storedImeis.remove(at: index)
+                }
+                imeiToDelete = ""
+            }
+        } message: {
+            Text("Are you sure you want to delete this IMEI? This action cannot be undone.")
+        }
+        .alert("Discard Changes", isPresented: $showingCloseConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Discard", role: .destructive) {
+                closeDialog()
+            }
+        } message: {
+            Text("You have unsaved changes. Are you sure you want to discard them?")
+        }
+        .alert("IMEI Already Exists", isPresented: $showImeiDuplicateAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(duplicateImeiMessage)
+        }
+        .alert("IMEI Required", isPresented: $showImeiValidationAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(imeiValidationMessage)
         }
     }
     
@@ -406,72 +642,240 @@ struct AddProductDialog: View {
                 .font(.system(size: 16, weight: .medium))
                 .foregroundColor(.primary)
             
-            ZStack {
-                TextField("Enter IMEI or Serial number", text: $imeiSerial)
-                    .textFieldStyle(PlainTextFieldStyle())
-                    .font(.system(size: 18, weight: .medium))
-                    .focused($isImeiFocused)
-                    .padding(.horizontal, 20)
-                    .padding(.trailing, 50) // Space for camera button
-                    .padding(.vertical, 16)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(.regularMaterial)
-                    )
-                    #if os(iOS)
-                    .keyboardType(.numberPad)
-                    .submitLabel(.done)
-                    #endif
-                    .onSubmit {
-                        isImeiFocused = false
+            // IMEI dropdown button using new component
+            ImeiDropdownButton(
+                searchText: $imeiSearchText,
+                storedImeis: $storedImeis,
+                isOpen: $showingImeiDropdown,
+                buttonFrame: $imeiButtonFrame,
+                isFocused: $isImeiFocused,
+                internalSearchText: $imeiInternalSearchText
+            )
+            
+            // Inline IMEI dropdown (iPhone/iPad) – expands and pushes content down
+            #if os(iOS)
+            if showingImeiDropdown {
+                ImeiDropdownOverlay(
+                    isOpen: $showingImeiDropdown,
+                    storedImeis: $storedImeis,
+                    searchText: $imeiSearchText,
+                    internalSearchText: $imeiInternalSearchText,
+                    buttonFrame: imeiButtonFrame,
+                    onDelete: { imei in
+                        imeiToDelete = imei
+                        showingDeleteConfirmation = true
                     }
-                    .id("imei")
-                
-                // Camera button positioned on the right
-                HStack {
-                    Spacer()
-                    Button(action: {
-                        #if os(iOS)
-                        // Use iPhone scanner sheet for both iPhone and iPad
-                        showingiPhoneBarcodeScanner = true
-                        #else
-                        showingCameraView = true
-                        #endif
-                    }) {
-                        Image(systemName: "camera")
-                            .foregroundColor(.secondary)
-                            .font(.system(size: 16))
-                            .frame(width: 40, height: 40)
-                            .background(
-                                Circle()
-                                    .fill(Color.secondary.opacity(0.1))
-                            )
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    .padding(.trailing, 10)
-                }
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
+            #endif
         }
     }
     
     private var desktopImeiField: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("IMEI/Serial")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundColor(.primary)
+            HStack {
+                Text("IMEI/Serial")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(.primary)
+                Text("*")
+                    .foregroundColor(.red)
+                    .font(.system(size: 18, weight: .bold))
+                Spacer()
+            }
+            Spacer(minLength: 4)
             
-            TextField("Enter IMEI or Serial number", text: $imeiSerial)
-                .textFieldStyle(PlainTextFieldStyle())
-                .font(.system(size: 18, weight: .medium))
-                .padding(.horizontal, 20)
-                .padding(.vertical, 16)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(.regularMaterial)
-                )
-                #if os(iOS)
-                .keyboardType(.numberPad)
+            ZStack(alignment: .trailing) {
+                TextField(storedImeis.isEmpty ? "Enter IMEI or Serial number" : "\(storedImeis.count) IMEI\(storedImeis.count == 1 ? "" : "s") added", text: $imeiSerial)
+                    .textFieldStyle(PlainTextFieldStyle())
+                    .font(.system(size: 18, weight: .medium))
+                    .padding(.horizontal, 20)
+                    .padding(.trailing, 96)
+                    .padding(.vertical, 16)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(.regularMaterial)
+                    )
+                    .background(
+                        GeometryReader { geometry in
+                            Color.clear
+                                .onAppear {
+                                    imeiButtonFrame = geometry.frame(in: .global)
+                                }
+                                .onChange(of: geometry.frame(in: .global)) { newFrame in
+                                    imeiButtonFrame = newFrame
+                                }
+                        }
+                    )
+                
+                #if os(macOS)
+                // macOS: Add typed IMEI into storedImeis using a checkmark button
+                HStack {
+                    Spacer()
+                    if !imeiSerial.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Button(action: {
+                            Task {
+                                await validateAndAddImei()
+                            }
+                        }) {
+                            if isCheckingImei {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .green))
+                                    .frame(width: 40, height: 40)
+                            } else {
+                                Image(systemName: "checkmark")
+                                    .foregroundColor(.green)
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .frame(width: 40, height: 40)
+                                    .contentShape(Rectangle())
+                            }
+                        }
+                        .disabled(isCheckingImei)
+                        .buttonStyle(PlainButtonStyle())
+                        .padding(.trailing, 8)
+                    }
+                    // Dropdown toggle button (to the right of checkmark, like iOS)
+                    Button(action: {
+                        withAnimation {
+                            showingImeiDropdown.toggle()
+                        }
+                    }) {
+                        Image(systemName: showingImeiDropdown ? "chevron.up" : "chevron.down")
+                            .foregroundColor(.secondary)
+                            .font(.system(size: 14))
+                            .frame(width: 40, height: 40)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .padding(.trailing, 10)
+                }
                 #endif
+            }
+
+            #if os(macOS)
+            // Remove inline list on macOS – overlay is used instead
+            #endif
+        }
+    }
+    
+    private var desktopColorDropdownOverlay: some View {
+        Group {
+            #if os(macOS)
+            if showingColorDropdown {
+                ColorDropdownOverlay(
+                    isOpen: $showingColorDropdown,
+                    selectedColor: $color,
+                    searchText: $colorSearchText,
+                    internalSearchText: $colorInternalSearchText,
+                    colors: colors,
+                    buttonFrame: colorButtonFrame,
+                    onAddColor: { colorName in
+                        addNewColor(colorName)
+                    }
+                )
+            }
+            #endif
+        }
+    }
+    
+    private var desktopCapacityDropdownOverlay: some View {
+        Group {
+            #if os(macOS)
+            if showingCapacityDropdown {
+                CapacityDropdownOverlay(
+                    isOpen: $showingCapacityDropdown,
+                    selectedCapacity: $capacity,
+                    searchText: $capacitySearchText,
+                    internalSearchText: $capacityInternalSearchText,
+                    capacities: capacities,
+                    buttonFrame: capacityButtonFrame,
+                    onAddCapacity: { capacityName in
+                        addNewCapacity(capacityName)
+                    }
+                )
+            }
+            #endif
+        }
+    }
+    
+    // MARK: - Desktop IMEI Dropdown Overlay
+    private var desktopImeiDropdownOverlay: some View {
+        Group {
+            #if os(macOS)
+            if showingImeiDropdown {
+                GeometryReader { geometry in
+                    VStack(spacing: 0) {
+                        let list = storedImeis
+                        let itemHeight: CGFloat = 50
+                        let maxHeight: CGFloat = 250
+                        let height = max(60, min(CGFloat(max(list.count, 1)) * itemHeight, maxHeight))
+
+                        VStack(spacing: 0) {
+                            if list.isEmpty {
+                                HStack(spacing: 10) {
+                                    Image(systemName: "barcode")
+                                        .foregroundColor(.secondary)
+                                    Text("No IMEIs added. Type and click ✓ to add.")
+                                        .font(.system(size: 14))
+                                        .foregroundColor(.secondary)
+                                    Spacer()
+                                }
+                                .padding(12)
+                            } else {
+                                ScrollView {
+                                    LazyVStack(spacing: 0) {
+                                        ForEach(Array(list.enumerated()), id: \.offset) { index, imei in
+                                            HStack(alignment: .center, spacing: 12) {
+                                                Text(imei)
+                                                    .font(.system(size: 15, weight: .medium))
+                                                    .foregroundColor(.primary)
+                                                    .lineLimit(2)
+                                                    .truncationMode(.tail)
+                                                Spacer()
+                                                Button(action: {
+                                                    imeiToDelete = imei
+                                                    showingDeleteConfirmation = true
+                                                }) {
+                                                    Image(systemName: "trash")
+                                                        .font(.system(size: 14, weight: .semibold))
+                                                        .foregroundColor(.red)
+                                                        .frame(width: 30, height: 30)
+                                                        .background(Circle().fill(Color.red.opacity(0.1)))
+                                                }
+                                                .buttonStyle(PlainButtonStyle())
+                                                .contentShape(Rectangle())
+                                            }
+                                            .padding(.horizontal, 12)
+                                            .frame(height: itemHeight)
+
+                                            if index < list.count - 1 {
+                                                Divider().padding(.leading, 12)
+                                            }
+                                        }
+                                    }
+                                }
+                                .frame(height: height)
+                            }
+                        }
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(.regularMaterial)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+                                )
+                        )
+                        .frame(maxHeight: height)
+                        .frame(width: imeiButtonFrame.width)
+                        .offset(x: imeiButtonFrame.minX, y: imeiButtonFrame.maxY + 5)
+                    }
+                    .ignoresSafeArea()
+                }
+                .transition(.opacity)
+            }
+            #endif
         }
     }
     
@@ -498,8 +902,7 @@ struct AddProductDialog: View {
             Spacer()
             
             Button(action: {
-                isPresented = false
-                onDismiss?()
+                handleCloseAction()
             }) {
                 Image(systemName: "xmark")
                     .font(.system(size: 16, weight: .semibold))
@@ -547,13 +950,7 @@ struct AddProductDialog: View {
         HStack(spacing: 28) {
             desktopBrandField
             desktopModelField
-            desktopFormField(
-                title: "Capacity (GB)",
-                isRequired: true,
-                placeholder: "Enter capacity in GB",
-                text: $capacity,
-                isEnabled: true
-            )
+            desktopCapacityField
         }
     }
     
@@ -561,13 +958,7 @@ struct AddProductDialog: View {
         HStack(spacing: 28) {
              desktopImeiField
             desktopCarrierField
-            desktopFormField(
-                title: "Color",
-                isRequired: true,
-                placeholder: "Enter color",
-                text: $color,
-                isEnabled: true
-            )
+            desktopColorField
         }
     }
     
@@ -749,11 +1140,97 @@ struct AddProductDialog: View {
         }
     }
     
+    private var desktopColorField: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Color")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(.primary)
+                Text("*")
+                    .foregroundColor(.red)
+                    .font(.system(size: 18, weight: .bold))
+                Spacer()
+            }
+            
+            ColorDropdownButton(
+                searchText: $colorSearchText,
+                selectedColor: $color,
+                isOpen: $showingColorDropdown,
+                buttonFrame: $colorButtonFrame,
+                isFocused: $isColorFocused,
+                internalSearchText: $colorInternalSearchText,
+                isLoading: isLoadingColors
+            )
+            
+            // Inline dropdown (iOS only)
+            #if os(iOS)
+            if showingColorDropdown {
+                ColorDropdownOverlay(
+                    isOpen: $showingColorDropdown,
+                    selectedColor: $color,
+                    searchText: $colorSearchText,
+                    internalSearchText: $colorInternalSearchText,
+                    colors: colors,
+                    buttonFrame: colorButtonFrame,
+                    onAddColor: { colorName in
+                        addNewColor(colorName)
+                    }
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            }
+            #endif
+        }
+    }
+    
+    private var desktopCapacityField: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Capacity")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(.primary)
+                Text("*")
+                    .foregroundColor(.red)
+                    .font(.system(size: 18, weight: .bold))
+                Spacer()
+            }
+            
+            CapacityDropdownButton(
+                searchText: $capacitySearchText,
+                selectedCapacity: $capacity,
+                isOpen: $showingCapacityDropdown,
+                buttonFrame: $capacityButtonFrame,
+                isFocused: $isCapacityFocused,
+                internalSearchText: $capacityInternalSearchText,
+                capacityUnit: $capacityUnit,
+                isLoading: isLoadingCapacities
+            )
+            
+            // Inline dropdown (iOS only)
+            #if os(iOS)
+            if showingCapacityDropdown {
+                CapacityDropdownOverlay(
+                    isOpen: $showingCapacityDropdown,
+                    selectedCapacity: $capacity,
+                    searchText: $capacitySearchText,
+                    internalSearchText: $capacityInternalSearchText,
+                    capacities: capacities,
+                    buttonFrame: capacityButtonFrame,
+                    onAddCapacity: { capacityName in
+                        addNewCapacity(capacityName)
+                    }
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            }
+            #endif
+        }
+    }
+    
     private var desktopActionButtons: some View {
         HStack(spacing: 16) {
             Button(action: {
-                isPresented = false
-                onDismiss?()
+                handleCloseAction()
             }) {
                 Text("Cancel")
                     .font(.system(size: 18, weight: .bold))
@@ -777,7 +1254,9 @@ struct AddProductDialog: View {
             }
             
             Button(action: {
-                // Non-functional for now
+                if isAddEnabled {
+                    handleSaveAndClose()
+                }
             }) {
                 HStack(spacing: 12) {
                     Image(systemName: "plus")
@@ -803,8 +1282,8 @@ struct AddProductDialog: View {
                 .shadow(color: Color(red: 0.25, green: 0.33, blue: 0.54).opacity(0.4), radius: 12, x: 0, y: 6)
             }
             .buttonStyle(PlainButtonStyle())
-            .disabled(true)
-            .opacity(0.7)
+            .disabled(!isAddEnabled)
+            .opacity(isAddEnabled ? 1.0 : 0.7)
             .onHover { isHovering in
                 #if os(macOS)
                 if isHovering {
@@ -1148,6 +1627,95 @@ struct AddProductDialog: View {
         }
     }
     
+    // MARK: - Color Field
+    private var colorField: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Color")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundColor(.primary)
+                Text("*")
+                    .foregroundColor(.red)
+                    .font(.subheadline)
+            }
+            
+            ColorDropdownButton(
+                searchText: $colorSearchText,
+                selectedColor: $color,
+                isOpen: $showingColorDropdown,
+                buttonFrame: $colorButtonFrame,
+                isFocused: $isColorFocused,
+                internalSearchText: $colorInternalSearchText,
+                isLoading: isLoadingColors
+            )
+            
+            // Inline dropdown (iOS only)
+            #if os(iOS)
+            if showingColorDropdown {
+                ColorDropdownOverlay(
+                    isOpen: $showingColorDropdown,
+                    selectedColor: $color,
+                    searchText: $colorSearchText,
+                    internalSearchText: $colorInternalSearchText,
+                    colors: colors,
+                    buttonFrame: colorButtonFrame,
+                    onAddColor: { colorName in
+                        addNewColor(colorName)
+                    }
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            }
+            #endif
+        }
+    }
+    
+    // MARK: - Capacity Field
+    private var capacityField: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Capacity")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundColor(.primary)
+                Text("*")
+                    .foregroundColor(.red)
+                    .font(.subheadline)
+            }
+            
+            CapacityDropdownButton(
+                searchText: $capacitySearchText,
+                selectedCapacity: $capacity,
+                isOpen: $showingCapacityDropdown,
+                buttonFrame: $capacityButtonFrame,
+                isFocused: $isCapacityFocused,
+                internalSearchText: $capacityInternalSearchText,
+                capacityUnit: $capacityUnit,
+                isLoading: isLoadingCapacities
+            )
+            
+            // Inline dropdown (iOS only)
+            #if os(iOS)
+            if showingCapacityDropdown {
+                CapacityDropdownOverlay(
+                    isOpen: $showingCapacityDropdown,
+                    selectedCapacity: $capacity,
+                    searchText: $capacitySearchText,
+                    internalSearchText: $capacityInternalSearchText,
+                    capacities: capacities,
+                    buttonFrame: capacityButtonFrame,
+                    onAddCapacity: { capacityName in
+                        addNewCapacity(capacityName)
+                    }
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            }
+            #endif
+        }
+    }
+    
     // MARK: - Storage Location Field
     private var storageLocationField: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1204,21 +1772,32 @@ struct AddProductDialog: View {
         fieldId: String,
         keyboardType: KeyboardType = .default
     ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text(title)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundColor(isEnabled ? .primary : .secondary)
                 if isRequired {
                     Text("*")
                         .foregroundColor(.red)
-                        .font(.subheadline)
+                        .font(.system(size: 16, weight: .semibold))
                 }
+                Spacer()
             }
             
             TextField(placeholder, text: text)
-                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .font(.system(size: 16))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 16)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(formFieldBackgroundColor)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(focus.wrappedValue ? Color.blue : formFieldBorderColor, lineWidth: focus.wrappedValue ? 2 : 1)
+                        )
+                        .shadow(color: focus.wrappedValue ? Color.blue.opacity(0.1) : Color.black.opacity(0.05), radius: focus.wrappedValue ? 8 : 4, x: 0, y: 2)
+                )
                 .disabled(!isEnabled)
                 .focused(focus)
                 .id(fieldId)
@@ -1391,7 +1970,7 @@ struct AddProductDialog: View {
     }
     
     private var isLoading: Bool {
-        return isAddingBrand || isAddingModel || isAddingCarrier
+        return isAddingBrand || isAddingModel || isAddingCarrier || isAddingColor || isAddingCapacity
     }
     
     private var loadingMessage: String {
@@ -1401,6 +1980,10 @@ struct AddProductDialog: View {
             return "Adding model..."
         } else if isAddingCarrier {
             return "Adding carrier..."
+        } else if isAddingColor {
+            return "Adding color..."
+        } else if isAddingCapacity {
+            return "Adding capacity..."
         } else {
             return "Loading..."
         }
@@ -1459,7 +2042,9 @@ struct AddProductDialog: View {
                     return 
                 }
                 
-                let carrierNames = documents.map { $0.documentID }
+                let carrierNames = documents.compactMap { document in
+                    document.data()["carrier"] as? String
+                }
                 print("Fetched \(carrierNames.count) carriers: \(carrierNames)")
                 
                 self.carriers = carrierNames.sorted()
@@ -1475,33 +2060,45 @@ struct AddProductDialog: View {
         }
         
         isLoadingModels = true
-        let db = Firestore.firestore()
+        let brandName = selectedBrand
         
-        db.collection("PhoneBrands")
-            .document(selectedBrand)
-            .collection("Models")
-            .getDocuments { snapshot, error in
-                DispatchQueue.main.async {
+        getBrandDocumentId(for: brandName) { brandDocId in
+            let db = Firestore.firestore()
+            DispatchQueue.main.async {
+                guard let brandDocId = brandDocId else {
                     self.isLoadingModels = false
-                    
-                    if let error = error {
-                        print("Error fetching phone models for brand \(self.selectedBrand): \(error)")
-                        return
-                    }
-                    
-                    guard let documents = snapshot?.documents else { 
-                        print("No model documents found for brand \(self.selectedBrand)")
-                        self.phoneModels = []
-                        return 
-                    }
-                    
-                    let modelNames = documents.map { $0.documentID }
-                    print("Fetched \(modelNames.count) models for brand \(self.selectedBrand): \(modelNames)")
-                    
-                    self.phoneModels = modelNames.sorted()
-                    print("Sorted models: \(self.phoneModels)")
+                    self.phoneModels = []
+                    return
                 }
+                db.collection("PhoneBrands")
+                    .document(brandDocId)
+                    .collection("Models")
+                    .getDocuments { snapshot, error in
+                        DispatchQueue.main.async {
+                            self.isLoadingModels = false
+                            
+                            if let error = error {
+                                print("Error fetching phone models for brand \(brandName): \(error)")
+                                return
+                            }
+                            
+                            guard let documents = snapshot?.documents else {
+                                print("No model documents found for brand \(brandName)")
+                                self.phoneModels = []
+                                return
+                            }
+                            
+                            let modelNames = documents.compactMap { document in
+                                document.data()["model"] as? String
+                            }
+                            print("Fetched \(modelNames.count) models for brand \(brandName): \(modelNames)")
+                            
+                            self.phoneModels = modelNames.sorted()
+                            print("Sorted models: \(self.phoneModels)")
+                        }
+                    }
             }
+        }
     }
     
     private func fetchPhoneBrands() {
@@ -1522,7 +2119,9 @@ struct AddProductDialog: View {
                     return 
                 }
                 
-                let brandNames = documents.map { $0.documentID }
+                let brandNames = documents.compactMap { document in
+                    document.data()["brand"] as? String
+                }
                 print("Fetched \(brandNames.count) brands: \(brandNames)")
                 
                 self.phoneBrands = brandNames.sorted()
@@ -1537,7 +2136,7 @@ struct AddProductDialog: View {
         
         let db = Firestore.firestore()
         
-        db.collection("PhoneBrands").document(brandName).setData([:]) { error in
+        db.collection("PhoneBrands").addDocument(data: ["brand": brandName]) { error in
             DispatchQueue.main.async {
                 // Hide loading overlay
                 self.isAddingBrand = false
@@ -1585,44 +2184,54 @@ struct AddProductDialog: View {
         // Show loading overlay
         isAddingModel = true
         
-        let db = Firestore.firestore()
-        
-        db.collection("PhoneBrands")
-            .document(selectedBrand)
-            .collection("Models")
-            .document(modelName)
-            .setData([:]) { error in
-                DispatchQueue.main.async {
-                    // Hide loading overlay
+        let brandName = selectedBrand
+        getBrandDocumentId(for: brandName) { brandDocId in
+            let db = Firestore.firestore()
+            DispatchQueue.main.async {
+                guard let brandDocId = brandDocId else {
                     self.isAddingModel = false
-                    
-                    if let error = error {
-                        print("Error adding model: \(error)")
-                        return
-                    }
-                    
-                    // Add to local array
-                    self.phoneModels.append(modelName)
-                    self.phoneModels.sort()
-                    
-                    // Select the new model
-                    self.selectedModel = modelName
-                    self.modelSearchText = modelName
-                    
-                    // Show confirmation
-                    self.confirmationMessage = "Model '\(modelName)' added successfully!"
-                    self.showingConfirmation = true
-                    
-                    // Add haptic feedback
-                    #if os(iOS)
-                    let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
-                    impactFeedback.impactOccurred()
-                    #endif
-                    
-                // Hide confirmation after delay
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    self.showingConfirmation = false
+                    print("Cannot add model: brand document not found for \(brandName)")
+                    return
                 }
+                db.collection("PhoneBrands")
+                    .document(brandDocId)
+                    .collection("Models")
+                    .addDocument(data: [
+                        "model": modelName
+                    ]) { error in
+                        DispatchQueue.main.async {
+                            // Hide loading overlay
+                            self.isAddingModel = false
+                            
+                            if let error = error {
+                                print("Error adding model: \(error)")
+                                return
+                            }
+                            
+                            // Add to local array
+                            self.phoneModels.append(modelName)
+                            self.phoneModels.sort()
+                            
+                            // Select the new model
+                            self.selectedModel = modelName
+                            self.modelSearchText = modelName
+                            
+                            // Show confirmation
+                            self.confirmationMessage = "Model '\(modelName)' added successfully!"
+                            self.showingConfirmation = true
+                            
+                            // Add haptic feedback
+                            #if os(iOS)
+                            let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+                            impactFeedback.impactOccurred()
+                            #endif
+                            
+                            // Hide confirmation after delay
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                                self.showingConfirmation = false
+                            }
+                        }
+                    }
             }
         }
     }
@@ -1633,7 +2242,7 @@ struct AddProductDialog: View {
         
         let db = Firestore.firestore()
         
-        db.collection("Carriers").document(carrierName).setData([:]) { error in
+        db.collection("Carriers").addDocument(data: ["carrier": carrierName]) { error in
             DispatchQueue.main.async {
                 // Hide loading overlay
                 self.isAddingCarrier = false
@@ -1687,11 +2296,71 @@ struct AddProductDialog: View {
                     return 
                 }
                 
-                let locationNames = documents.map { $0.documentID }
+                let locationNames = documents.compactMap { document in
+                    document.data()["storageLocation"] as? String
+                }
                 print("Fetched \(locationNames.count) storage locations: \(locationNames)")
                 
                 self.storageLocations = locationNames.sorted()
                 print("Sorted storage locations: \(self.storageLocations)")
+            }
+        }
+    }
+    
+    private func fetchColors() {
+        isLoadingColors = true
+        let db = Firestore.firestore()
+        
+        db.collection("Colors").getDocuments { snapshot, error in
+            DispatchQueue.main.async {
+                self.isLoadingColors = false
+                
+                if let error = error {
+                    print("Error fetching colors: \(error)")
+                    return
+                }
+                
+                guard let documents = snapshot?.documents else { 
+                    print("No documents found in Colors collection")
+                    return 
+                }
+                
+                let colorNames = documents.compactMap { document in
+                    document.data()["color"] as? String
+                }
+                print("Fetched \(colorNames.count) colors: \(colorNames)")
+                
+                self.colors = colorNames.sorted()
+                print("Sorted colors: \(self.colors)")
+            }
+        }
+    }
+    
+    private func fetchCapacities() {
+        isLoadingCapacities = true
+        let db = Firestore.firestore()
+        
+        db.collection("Capacities").getDocuments { snapshot, error in
+            DispatchQueue.main.async {
+                self.isLoadingCapacities = false
+                
+                if let error = error {
+                    print("Error fetching capacities: \(error)")
+                    return
+                }
+                
+                guard let documents = snapshot?.documents else { 
+                    print("No documents found in Capacities collection")
+                    return 
+                }
+                
+                let capacityNames = documents.compactMap { document in
+                    document.data()["capacity"] as? String
+                }
+                print("Fetched \(capacityNames.count) capacities: \(capacityNames)")
+                
+                self.capacities = capacityNames.sorted()
+                print("Sorted capacities: \(self.capacities)")
             }
         }
     }
@@ -1702,7 +2371,7 @@ struct AddProductDialog: View {
         
         let db = Firestore.firestore()
         
-        db.collection("StorageLocations").document(locationName).setData([:]) { error in
+        db.collection("StorageLocations").addDocument(data: ["storageLocation": locationName]) { error in
             DispatchQueue.main.async {
                 // Hide loading overlay
                 self.isAddingStorageLocation = false
@@ -1737,6 +2406,282 @@ struct AddProductDialog: View {
             }
         }
     }
+    
+    private func addNewColor(_ colorName: String) {
+        // Show loading overlay
+        isAddingColor = true
+        
+        let db = Firestore.firestore()
+        
+        db.collection("Colors").addDocument(data: ["color": colorName]) { error in
+            DispatchQueue.main.async {
+                // Hide loading overlay
+                self.isAddingColor = false
+                
+                if let error = error {
+                    print("Error adding color: \(error)")
+                    return
+                }
+                
+                // Add to local array
+                self.colors.append(colorName)
+                self.colors.sort()
+                
+                // Select the new color
+                self.color = colorName
+                self.colorSearchText = colorName
+                
+                // Show confirmation
+                self.confirmationMessage = "Color '\(colorName)' added successfully!"
+                self.showingConfirmation = true
+                
+                // Add haptic feedback
+                #if os(iOS)
+                let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+                impactFeedback.impactOccurred()
+                #endif
+                
+                // Hide confirmation after delay
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    self.showingConfirmation = false
+                }
+            }
+        }
+    }
+    
+    private func addNewCapacity(_ capacityName: String) {
+        // Show loading overlay
+        isAddingCapacity = true
+        
+        let db = Firestore.firestore()
+        
+        db.collection("Capacities").addDocument(data: ["capacity": capacityName]) { error in
+            DispatchQueue.main.async {
+                // Hide loading overlay
+                self.isAddingCapacity = false
+                
+                if let error = error {
+                    print("Error adding capacity: \(error)")
+                    return
+                }
+                
+                // Add to local array
+                self.capacities.append(capacityName)
+                self.capacities.sort()
+                
+                // Select the new capacity
+                self.capacity = capacityName
+                self.capacitySearchText = capacityName
+                
+                // Show confirmation
+                self.confirmationMessage = "Capacity '\(capacityName)' added successfully!"
+                self.showingConfirmation = true
+                
+                // Add haptic feedback
+                #if os(iOS)
+                let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+                impactFeedback.impactOccurred()
+                #endif
+                
+                // Hide confirmation after delay
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    self.showingConfirmation = false
+                }
+            }
+        }
+    }
+    
+    #if os(macOS)
+    private func setupBarcodeListener() {
+        let db = Firestore.firestore()
+        
+        barcodeListener = db.collection("Data").document("scanner")
+            .addSnapshotListener { documentSnapshot, error in
+                guard let document = documentSnapshot else {
+                    print("Error fetching barcode document: \(error?.localizedDescription ?? "Unknown error")")
+                    return
+                }
+                
+                guard let data = document.data(),
+                      let barcode = data["barcode"] as? String,
+                      !barcode.isEmpty else {
+                    return
+                }
+                
+                // Process the barcode atomically
+                processBarcodeAtomically(barcode: barcode)
+            }
+    }
+    
+    private func cleanupBarcodeListener() {
+        barcodeListener?.remove()
+        barcodeListener = nil
+    }
+    
+    private func processBarcodeAtomically(barcode: String) {
+        let db = Firestore.firestore()
+        
+        // Check if IMEI already exists in stored list
+        if storedImeis.contains(barcode) {
+            DispatchQueue.main.async {
+                self.duplicateImeiMessage = "IMEI '\(barcode)' is already in the list"
+                self.showImeiDuplicateAlert = true
+            }
+            
+            // Delete the barcode from the database
+            db.collection("Data").document("scanner").updateData([
+                "barcode": FieldValue.delete()
+            ]) { error in
+                if let error = error {
+                    print("Error deleting barcode from database: \(error)")
+                }
+            }
+            return
+        }
+        
+        // Check if IMEI exists in database
+        let query = db.collection("IMEI").whereField("imei", isEqualTo: barcode).limit(to: 1)
+        query.getDocuments { snapshot, error in
+            if let error = error {
+                print("Error checking IMEI: \(error)")
+                return
+            }
+            
+            DispatchQueue.main.async {
+                if let snapshot = snapshot, !snapshot.documents.isEmpty {
+                    // IMEI already exists in database - show rejection
+                    self.duplicateImeiMessage = "IMEI '\(barcode)' already exists in the inventory"
+                    self.showImeiDuplicateAlert = true
+                } else {
+                    // IMEI is unique - add it and show confirmation
+                    self.storedImeis.append(barcode)
+                    self.addedBarcode = barcode
+                    self.showBarcodeAddedConfirmation = true
+                    
+                    // Auto-hide confirmation after 1.5 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        self.showBarcodeAddedConfirmation = false
+                    }
+                }
+            }
+            
+            // Delete the barcode from the database
+            db.collection("Data").document("scanner").updateData([
+                "barcode": FieldValue.delete()
+            ]) { error in
+                if let error = error {
+                    print("Error deleting barcode from database: \(error)")
+                } else {
+                    print("Successfully processed and deleted barcode: \(barcode)")
+                }
+            }
+        }
+    }
+    #endif
+    
+    // MARK: - Desktop Barcode Confirmation Overlay
+    #if os(macOS)
+    private var desktopBarcodeConfirmationOverlay: some View {
+        Group {
+            if showBarcodeAddedConfirmation {
+                ZStack {
+                    // Background overlay
+                    Color.black.opacity(0.3)
+                        .ignoresSafeArea()
+                    
+                    // Confirmation card
+                    VStack(spacing: 16) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 48))
+                            .foregroundColor(.green)
+                        
+                        Text("IMEI/Serial Added")
+                            .font(.system(size: 20, weight: .bold))
+                            .foregroundColor(.primary)
+                        
+                        Text(addedBarcode)
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
+                    }
+                    .padding(24)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16)
+                            .fill(.background)
+                            .shadow(radius: 10)
+                    )
+                    .frame(maxWidth: 300)
+                }
+            }
+        }
+    }
+    #endif
+    
+    // Helper to resolve brand document ID from brand name (auto-ID docs)
+    private func getBrandDocumentId(for brandName: String, completion: @escaping (String?) -> Void) {
+        let db = Firestore.firestore()
+        db.collection("PhoneBrands")
+            .whereField("brand", isEqualTo: brandName)
+            .limit(to: 1)
+            .getDocuments { snapshot, error in
+                if let error = error {
+                    print("Error resolving brand document for '\(brandName)': \(error)")
+                    completion(nil)
+                    return
+                }
+                guard let doc = snapshot?.documents.first else {
+                    print("No brand document found for name: \(brandName)")
+                    completion(nil)
+                    return
+                }
+                completion(doc.documentID)
+            }
+    }
+    
+    // MARK: - IMEI Validation
+    private func validateAndAddImei() async {
+        let trimmed = imeiSerial.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty && !storedImeis.contains(trimmed) else {
+            if storedImeis.contains(trimmed) {
+                await MainActor.run {
+                    duplicateImeiMessage = "IMEI '\(trimmed)' is already in the list"
+                    showImeiDuplicateAlert = true
+                }
+            }
+            return
+        }
+        
+        await MainActor.run {
+            isCheckingImei = true
+        }
+        
+        do {
+            let db = Firestore.firestore()
+            let query = db.collection("IMEI").whereField("imei", isEqualTo: trimmed).limit(to: 1)
+            let snapshot = try await query.getDocuments()
+            
+            await MainActor.run {
+                isCheckingImei = false
+                
+                if snapshot.documents.isEmpty {
+                    // IMEI is unique, add it
+                    storedImeis.append(trimmed)
+                    imeiSerial = ""
+                } else {
+                    // IMEI already exists in database
+                    duplicateImeiMessage = "IMEI '\(trimmed)' already exists in the inventory"
+                    showImeiDuplicateAlert = true
+                }
+            }
+        } catch {
+            await MainActor.run {
+                isCheckingImei = false
+                duplicateImeiMessage = "Error checking IMEI: \(error.localizedDescription)"
+                showImeiDuplicateAlert = true
+            }
+        }
+    }
 }
 
     // MARK: - Brand Dropdown Button
@@ -1759,7 +2704,7 @@ struct BrandDropdownButton: View {
                 .font(.system(size: 18, weight: .medium))
                 .focused($isFocused)
                 .padding(.horizontal, 20)
-                .padding(.trailing, 50) // Extra padding for button area
+                .padding(.trailing, 120) // Extra padding for unit buttons and dropdown button area
                 .padding(.vertical, 16)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
@@ -2141,7 +3086,7 @@ struct ModelDropdownButton: View {
                 .font(.system(size: 18, weight: .medium))
                 .focused($isFocused)
                 .padding(.horizontal, 20)
-                .padding(.trailing, 50) // Extra padding for button area
+                .padding(.trailing, 120) // Extra padding for unit buttons and dropdown button area
                 .padding(.vertical, 16)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
@@ -2526,7 +3471,7 @@ struct CarrierDropdownButton: View {
                 .font(.system(size: 18, weight: .medium))
                 .focused($isFocused)
                 .padding(.horizontal, 20)
-                .padding(.trailing, 50) // Extra padding for button area
+                .padding(.trailing, 120) // Extra padding for unit buttons and dropdown button area
                 .padding(.vertical, 16)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
@@ -2908,7 +3853,7 @@ struct StatusDropdownButton: View {
                 .font(.system(size: 18, weight: .medium))
                 .focused($isFocused)
                 .padding(.horizontal, 20)
-                .padding(.trailing, 50) // Extra padding for button area
+                .padding(.trailing, 120) // Extra padding for unit buttons and dropdown button area
                 .padding(.vertical, 16)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
@@ -3133,7 +4078,7 @@ struct StorageLocationDropdownButton: View {
                 .font(.system(size: 18, weight: .medium))
                 .focused($isFocused)
                 .padding(.horizontal, 20)
-                .padding(.trailing, 50) // Extra padding for button area
+                .padding(.trailing, 120) // Extra padding for unit buttons and dropdown button area
                 .padding(.vertical, 16)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
@@ -3487,6 +4432,447 @@ struct StorageLocationDropdownOverlay: View {
         .frame(height: 50) // Fixed height for better touch targets
         .background(
             // Hover effect for better interaction feedback
+            Rectangle()
+                .fill(Color.secondary.opacity(0.05))
+                .opacity(0)
+        )
+        .onHover { isHovering in
+            // Subtle hover effect for better UX
+        }
+    }
+}
+
+// MARK: - IMEI Dropdown Button
+struct ImeiDropdownButton: View {
+    @Binding var searchText: String
+    @Binding var storedImeis: [String]
+    @Binding var isOpen: Bool
+    @Binding var buttonFrame: CGRect
+    @FocusState.Binding var isFocused: Bool
+    @Binding var internalSearchText: String
+    
+    @Environment(\.colorScheme) var colorScheme
+    @State private var showingCameraView = false
+    @State private var showingiPhoneBarcodeScanner = false
+    @State private var showAddedConfirmation = false
+    
+    // IMEI validation state
+    @State private var isCheckingImei = false
+    @State private var showImeiDuplicateAlert = false
+    @State private var duplicateImeiMessage = ""
+    @State private var showImeiValidationAlert = false
+    @State private var imeiValidationMessage = ""
+    
+    var body: some View {
+        ZStack {
+            // Main TextField with padding for the button
+            TextField(storedImeis.isEmpty ? "Enter IMEI or Serial Number" : "\(storedImeis.count) IMEI\(storedImeis.count == 1 ? "" : "s") added", text: $searchText)
+                .textFieldStyle(PlainTextFieldStyle())
+                .font(.system(size: 18, weight: .medium))
+                .focused($isFocused)
+                .padding(.horizontal, 20)
+                .padding(.trailing, 100) // Extra padding for both buttons area
+                .padding(.vertical, 16)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(.regularMaterial)
+                )
+                .foregroundColor(storedImeis.isEmpty ? .secondary : .primary)
+#if os(iOS)
+                .keyboardType(.numberPad)
+#endif
+                .submitLabel(.done)
+                .onSubmit {
+                    isFocused = false
+                }
+            
+            // Separate buttons positioned side by side on the right
+            HStack(spacing: 8) {
+                Spacer()
+                
+                // Inline confirmation icon (brief)
+                if showAddedConfirmation {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                        .font(.system(size: 16))
+                        .transition(.opacity)
+                }
+                
+                // Add typed IMEI button (appears when there is text)
+                if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Button(action: {
+                        Task {
+                            await validateAndAddImeiFromField()
+                        }
+                    }) {
+                        if isCheckingImei {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                                .progressViewStyle(CircularProgressViewStyle(tint: .green))
+                                .frame(width: 40, height: 40)
+                        } else {
+                            Image(systemName: "checkmark")
+                                .foregroundColor(.green)
+                                .font(.system(size: 14, weight: .semibold))
+                                .frame(width: 40, height: 40)
+                                .contentShape(Rectangle())
+                        }
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .disabled(isCheckingImei)
+                }
+                
+                // Dropdown toggle button
+                Button(action: {
+                    withAnimation {
+                        isOpen.toggle()
+                    }
+                    if isOpen {
+                        isFocused = false
+                    }
+                }) {
+                    Image(systemName: isOpen ? "chevron.up" : "chevron.down")
+                        .foregroundColor(.secondary)
+                        .font(.system(size: 14))
+                        .frame(width: 40, height: 40) // Larger clickable area
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PlainButtonStyle())
+                .onHover { isHovering in
+                    #if os(macOS)
+                    if isHovering {
+                        NSCursor.pointingHand.set()
+                    } else {
+                        NSCursor.arrow.set()
+                    }
+                    #endif
+                }
+                
+                // Camera button
+                Button(action: {
+                    #if os(iOS)
+                    // Use iPhone scanner sheet for both iPhone and iPad
+                    showingiPhoneBarcodeScanner = true
+                    #else
+                    showingCameraView = true
+                    #endif
+                }) {
+                    Image(systemName: "camera")
+                        .foregroundColor(.secondary)
+                        .font(.system(size: 16))
+                        .frame(width: 40, height: 40)
+                        .background(
+                            Circle()
+                                .fill(Color.secondary.opacity(0.1))
+                        )
+                }
+                .buttonStyle(PlainButtonStyle())
+                .padding(.trailing, 10)
+            }
+        }
+        .background(
+            GeometryReader { geometry in
+                Color.clear
+                    .onAppear {
+                        buttonFrame = geometry.frame(in: .global)
+                    }
+                    .onChange(of: geometry.frame(in: .global)) { newFrame in
+                        buttonFrame = newFrame
+                    }
+            }
+        )
+        .onTapGesture {
+            withAnimation {
+                isOpen.toggle()
+            }
+            if isOpen {
+                isFocused = false
+            }
+        }
+        // Stop using typed text to filter the dropdown
+        // Removed syncing of internalSearchText from searchText
+        .onChange(of: isOpen) { newValue in
+            if newValue {
+                internalSearchText = ""
+            }
+        }
+        .onChange(of: isFocused) { focused in
+            if focused && !isOpen {
+                isOpen = true
+            }
+        }
+        .sheet(isPresented: $showingCameraView) {
+            CameraView(imeiText: $searchText)
+        }
+        #if os(iOS)
+        .sheet(isPresented: $showingiPhoneBarcodeScanner) {
+            iPhoneBarcodeScannerSheet(imeiText: $searchText, storedImeis: $storedImeis)
+        }
+        #endif
+        .alert("IMEI Already Exists", isPresented: $showImeiDuplicateAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(duplicateImeiMessage)
+        }
+        .alert("IMEI Required", isPresented: $showImeiValidationAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(imeiValidationMessage)
+        }
+    }
+    
+    // MARK: - IMEI Validation
+    private func validateAndAddImeiFromField() async {
+        let trimmed = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty && !storedImeis.contains(trimmed) else {
+            if storedImeis.contains(trimmed) {
+                await MainActor.run {
+                    duplicateImeiMessage = "IMEI '\(trimmed)' is already in the list"
+                    showImeiDuplicateAlert = true
+                }
+            }
+            return
+        }
+        
+        await MainActor.run {
+            isCheckingImei = true
+        }
+        
+        do {
+            let db = Firestore.firestore()
+            let query = db.collection("IMEI").whereField("imei", isEqualTo: trimmed).limit(to: 1)
+            let snapshot = try await query.getDocuments()
+            
+            await MainActor.run {
+                isCheckingImei = false
+                
+                if snapshot.documents.isEmpty {
+                    // IMEI is unique, add it
+                    storedImeis.append(trimmed)
+                    searchText = ""
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showAddedConfirmation = true
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            showAddedConfirmation = false
+                        }
+                    }
+                } else {
+                    // IMEI already exists in database
+                    duplicateImeiMessage = "IMEI '\(trimmed)' already exists in the inventory"
+                    showImeiDuplicateAlert = true
+                }
+            }
+        } catch {
+            await MainActor.run {
+                isCheckingImei = false
+                duplicateImeiMessage = "Error checking IMEI: \(error.localizedDescription)"
+                showImeiDuplicateAlert = true
+            }
+        }
+    }
+}
+
+// MARK: - IMEI Dropdown Overlay
+struct ImeiDropdownOverlay: View {
+    @Binding var isOpen: Bool
+    @Binding var storedImeis: [String]
+    @Binding var searchText: String
+    @Binding var internalSearchText: String
+    let buttonFrame: CGRect
+    let onDelete: (String) -> Void
+    
+    private var filteredImeis: [String] {
+        if internalSearchText.isEmpty {
+            return storedImeis
+        } else {
+            return storedImeis.filter { imei in
+                imei.localizedCaseInsensitiveContains(internalSearchText)
+            }
+        }
+    }
+    
+    var body: some View {
+        Group {
+            #if os(iOS)
+            // Inline dropdown that pushes content down (iOS only)
+            inlineDropdown
+            #else
+            // Positioned dropdown for macOS
+            positionedDropdown
+            #endif
+        }
+        .onAppear {
+            print("ImeiDropdownOverlay appeared with \(storedImeis.count) IMEIs: \(storedImeis)")
+            print("ImeiDropdownOverlay buttonFrame: \(buttonFrame)")
+        }
+    }
+    
+    // MARK: - Inline Dropdown (iOS)
+    private var inlineDropdown: some View {
+        VStack(spacing: 0) {
+            if storedImeis.isEmpty {
+                HStack(spacing: 10) {
+                    Image(systemName: "barcode")
+                        .foregroundColor(.secondary)
+                    Text("No IMEIs added. Use the camera to add.")
+                        .font(.system(size: 14))
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+                .padding(12)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(filteredImeis.enumerated()), id: \.offset) { index, imei in
+                            VStack(spacing: 0) {
+                                cleanImeiRow(
+                                    title: imei,
+                                    index: index,
+                                    action: {
+                                        isOpen = false
+                                        searchText = imei
+                                    },
+                                    onDelete: {
+                                        onDelete(imei)
+                                    }
+                                )
+                                
+                                // Subtle separator between items
+                                if index < filteredImeis.count - 1 {
+                                    Divider()
+                                        .background(Color.secondary.opacity(0.4))
+                                        .frame(height: 0.5)
+                                        .padding(.horizontal, 16)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: dynamicDropdownHeight)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(.regularMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                )
+        )
+        .shadow(color: Color.black.opacity(0.08), radius: 12, x: 0, y: 6)
+        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isOpen)
+    }
+    
+    private var dynamicDropdownHeight: CGFloat {
+        let itemHeight: CGFloat = 50
+        let imeiCount = filteredImeis.count
+        
+        if storedImeis.isEmpty {
+            return 60 // Height for empty state
+        } else if imeiCount <= 4 {
+            // For small lists, calculate exact height
+            let imeiHeight = CGFloat(imeiCount) * itemHeight
+            return min(imeiHeight, 240)
+        } else {
+            // For larger lists, use fixed height with scroll
+            return min(4 * itemHeight, 240)
+        }
+    }
+    
+    // MARK: - Positioned Dropdown (macOS)
+    private var positionedDropdown: some View {
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                if storedImeis.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "barcode")
+                            .font(.system(size: 32))
+                            .foregroundColor(.secondary)
+                        
+                        Text("No IMEIs added yet")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(.secondary)
+                        
+                        Text("Use the camera button to scan and add IMEIs")
+                            .font(.system(size: 14))
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding(.vertical, 40)
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(Array(filteredImeis.enumerated()), id: \.offset) { index, imei in
+                                cleanImeiRow(
+                                    title: imei,
+                                    index: index,
+                                    action: {
+                                        isOpen = false
+                                        searchText = imei
+                                    },
+                                    onDelete: {
+                                        onDelete(imei)
+                                    }
+                                )
+                                
+                                if index < filteredImeis.count - 1 {
+                                    Divider()
+                                        .background(Color.secondary.opacity(0.4))
+                                        .frame(height: 0.5)
+                                        .padding(.horizontal, 16)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .frame(width: 300, height: min(CGFloat(max(filteredImeis.count, 1)) * 50, 300))
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(.regularMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                    )
+            )
+            .shadow(color: Color.black.opacity(0.15), radius: 20, x: 0, y: 10)
+            .position(
+                x: buttonFrame.midX,
+                y: buttonFrame.maxY + 150 + (min(CGFloat(max(filteredImeis.count, 1)) * 50, 300) / 2)
+            )
+        }
+    }
+    
+    // MARK: - Helper Views
+    private func cleanImeiRow(title: String, index: Int, action: @escaping () -> Void, onDelete: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .center, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundColor(.primary)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                }
+                Spacer()
+                Button(action: onDelete) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.red)
+                        .frame(width: 30, height: 30)
+                        .background(Circle().fill(Color.red.opacity(0.1)))
+                }
+                .buttonStyle(PlainButtonStyle())
+                .contentShape(Rectangle())
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 50)
+        }
+        .buttonStyle(PlainButtonStyle())
+        .background(
             Rectangle()
                 .fill(Color.secondary.opacity(0.05))
                 .opacity(0)
@@ -4936,8 +6322,10 @@ class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
 
 // MARK: - iPhone Barcode Scanner Sheet
 
+#if os(iOS)
     struct iPhoneBarcodeScannerSheet: View {
         @Binding var imeiText: String
+        @Binding var storedImeis: [String]
         @Environment(\.dismiss) private var dismiss
         @State private var captureSession: AVCaptureSession?
         @State private var cameraDelegate = CameraDelegate()
@@ -4952,6 +6340,11 @@ class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
         @State private var capturedImageBarcodes: [String] = []
         @State private var isFlashlightOn = true
         @State private var captureDevice: AVCaptureDevice?
+        
+        // IMEI validation state
+        @State private var isCheckingImei = false
+        @State private var showImeiDuplicateAlert = false
+        @State private var duplicateImeiMessage = ""
     
     var body: some View {
         NavigationView {
@@ -5180,8 +6573,10 @@ class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
                              image: capturedImage,
                              barcodes: capturedImageBarcodes,
                              onSelect: { barcode in
-                                 imeiText = barcode
-                                 dismiss()
+                                 // Automatically validate and store, like before
+                                 Task {
+                                     await validateAndAddImeiFromScanner(barcode)
+                                 }
                              },
                              onCancel: {
                                  showingCapturedImage = false
@@ -5193,18 +6588,26 @@ class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
                                  capturedImage = nil
                                  capturedImageBarcodes.removeAll()
                                  isCapturingPhoto = false
+                                 // Turn flashlight back on for iPhone when retaking
+                                #if os(iOS)
+                                if UIDevice.current.userInterfaceIdiom == .phone {
+                                    ensureFlashlightOn()
+                                }
+                                #endif
                              }
                          )
                      }
                      #endif
                      
                      // Barcode selection overlay
-                     if showingBarcodeSelection {
+                    if showingBarcodeSelection {
                          iPhoneBarcodeSelectionOverlay(
                              barcodes: detectedBarcodes,
                              onSelect: { barcode in
-                                 imeiText = barcode
-                                 dismiss()
+                                // Automatically validate and store, like before
+                                Task {
+                                    await validateAndAddImeiFromScanner(barcode)
+                                }
                              },
                              onCancel: {
                                  showingBarcodeSelection = false
@@ -5222,6 +6625,11 @@ class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
         }
         .onDisappear {
             stopCamera()
+        }
+        .alert("IMEI Already Exists", isPresented: $showImeiDuplicateAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(duplicateImeiMessage)
         }
     }
     
@@ -5351,6 +6759,18 @@ class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
                      self.capturedImage = image
                      self.showingCapturedImage = true
                      self.isCapturingPhoto = false
+                     // Turn off flashlight after capture (iPhone only)
+                    if UIDevice.current.userInterfaceIdiom == .phone,
+                       let device = self.captureDevice, device.hasTorch {
+                        do {
+                            try device.lockForConfiguration()
+                            device.torchMode = .off
+                            device.unlockForConfiguration()
+                            self.isFlashlightOn = false
+                        } catch {
+                            print("Failed to turn off flashlight after capture: \(error)")
+                        }
+                    }
                  }
                  
                  // Analyze the frame for barcodes in background
@@ -5474,10 +6894,48 @@ class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
         return image
     }
     #endif
+    
+    // MARK: - Scanner IMEI Validation
+    private func validateAndAddImeiFromScanner(_ barcode: String) async {
+        // Check if IMEI already exists in stored list
+        if storedImeis.contains(barcode) {
+            await MainActor.run {
+                duplicateImeiMessage = "IMEI '\(barcode)' is already in the list"
+                showImeiDuplicateAlert = true
+            }
+            return
+        }
+        
+        do {
+            let db = Firestore.firestore()
+            let query = db.collection("IMEI").whereField("imei", isEqualTo: barcode).limit(to: 1)
+            let snapshot = try await query.getDocuments()
+            
+            await MainActor.run {
+                if snapshot.documents.isEmpty {
+                    // IMEI is unique - automatically store it and close scanner
+                    storedImeis.append(barcode)
+                    dismiss()
+                } else {
+                    // IMEI already exists in database - show alert but keep scanner open
+                    duplicateImeiMessage = "IMEI '\(barcode)' already exists in the inventory"
+                    showImeiDuplicateAlert = true
+                }
+            }
+        } catch {
+            await MainActor.run {
+                // Error occurred - show alert but keep scanner open
+                duplicateImeiMessage = "Error checking IMEI: \(error.localizedDescription)"
+                showImeiDuplicateAlert = true
+            }
+        }
+    }
 }
+#endif
 
 // MARK: - iPhone Barcode Selection Overlay
 
+#if os(iOS)
 struct iPhoneBarcodeSelectionOverlay: View {
     let barcodes: [String]
     let onSelect: (String) -> Void
@@ -5570,6 +7028,7 @@ struct iPhoneBarcodeSelectionOverlay: View {
         }
     }
 }
+#endif
 
 // MARK: - iPhone Captured Image Overlay
 
@@ -5824,6 +7283,752 @@ struct iPhoneCapturedImageOverlay: View {
 }
 #endif
 
+
+// MARK: - Color Dropdown Button
+struct ColorDropdownButton: View {
+    @Binding var searchText: String
+    @Binding var selectedColor: String
+    @Binding var isOpen: Bool
+    @Binding var buttonFrame: CGRect
+    @FocusState.Binding var isFocused: Bool
+    @Binding var internalSearchText: String
+    let isLoading: Bool
+    
+    var body: some View {
+        ZStack {
+            // Main TextField with padding for the button
+            TextField("Choose an option", text: $searchText)
+                .textFieldStyle(PlainTextFieldStyle())
+                .font(.system(size: 18, weight: .medium))
+                .focused($isFocused)
+                .padding(.horizontal, 20)
+                .padding(.trailing, 120) // Extra padding for unit buttons and dropdown button area
+                .padding(.vertical, 16)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(.regularMaterial)
+                )
+                .submitLabel(.done)
+                .onSubmit {
+                    isFocused = false
+                }
+                .onChange(of: searchText) { newValue in
+                    // Sync internal search with display text
+                    internalSearchText = newValue
+                    if !newValue.isEmpty && !isOpen && newValue != selectedColor {
+                        isOpen = true
+                    }
+                }
+                .onChange(of: isOpen) { newValue in
+                    // Clear internal search when opening dropdown to show full list
+                    if newValue {
+                        internalSearchText = ""
+                    }
+                }
+                .onChange(of: isFocused) { focused in
+                    if focused && !isOpen {
+                        isOpen = true
+                    }
+                }
+            
+            // Separate button positioned on the right
+            HStack {
+                Spacer()
+                if isLoading {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                        .padding(.trailing, 20)
+                } else {
+                    Button(action: {
+                        print("Color dropdown button clicked, isOpen before: \(isOpen)")
+                        withAnimation {
+                            isOpen.toggle()
+                        }
+                        print("Color dropdown button clicked, isOpen after: \(isOpen)")
+                        if isOpen {
+                            isFocused = false
+                        }
+                    }) {
+                        Image(systemName: isOpen ? "chevron.up" : "chevron.down")
+                            .foregroundColor(.secondary)
+                            .font(.system(size: 14))
+                            .frame(width: 40, height: 40) // Larger clickable area
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .onHover { isHovering in
+                        #if os(macOS)
+                        if isHovering {
+                            NSCursor.pointingHand.set()
+                        } else {
+                            NSCursor.arrow.set()
+                        }
+                        #endif
+                    }
+                    .padding(.trailing, 10)
+                }
+            }
+        }
+            .background(
+                GeometryReader { geometry in
+                    Color.clear
+                        .onAppear {
+                            buttonFrame = geometry.frame(in: .global)
+                            print("Color button frame captured: \(buttonFrame)")
+                        }
+                        .onChange(of: geometry.frame(in: .global)) { newFrame in
+                            buttonFrame = newFrame
+                        }
+                }
+            )
+    }
+}
+
+// MARK: - Color Dropdown Overlay
+struct ColorDropdownOverlay: View {
+    @Binding var isOpen: Bool
+    @Binding var selectedColor: String
+    @Binding var searchText: String
+    @Binding var internalSearchText: String
+    let colors: [String]
+    let buttonFrame: CGRect
+    let onAddColor: (String) -> Void
+    
+    private var filteredColors: [String] {
+        print("ColorDropdownOverlay - Total colors: \(colors.count), colors: \(colors)")
+        print("ColorDropdownOverlay - Internal search text: '\(internalSearchText)'")
+        
+        if internalSearchText.isEmpty {
+            let allColors = colors.sorted()
+            print("ColorDropdownOverlay - Showing all colors: \(allColors)")
+            return allColors // Show all colors sorted alphabetically when no search text
+        } else {
+            let filtered = colors.filter { color in
+                color.localizedCaseInsensitiveContains(internalSearchText)
+            }.sorted()
+            print("ColorDropdownOverlay - Filtered colors: \(filtered)")
+            return filtered
+        }
+    }
+    
+    private var shouldShowAddOption: Bool {
+        return !internalSearchText.isEmpty && !colors.contains { $0.localizedCaseInsensitiveCompare(internalSearchText) == .orderedSame }
+    }
+    
+    var body: some View {
+        Group {
+            #if os(iOS)
+            // Inline dropdown that pushes content down (iOS only)
+            inlineDropdown
+            #else
+            // Positioned dropdown for macOS
+            positionedDropdown
+            #endif
+        }
+        .onAppear {
+            print("ColorDropdownOverlay appeared with \(colors.count) colors: \(colors)")
+            print("ColorDropdownOverlay buttonFrame: \(buttonFrame)")
+        }
+    }
+    
+    // MARK: - Inline Dropdown
+    private var inlineDropdown: some View {
+        VStack(spacing: 0) {
+            // Add color option (if applicable)
+            if shouldShowAddOption {
+                VStack(spacing: 0) {
+                    cleanColorRow(
+                        title: "Add '\(internalSearchText)'",
+                        isAddOption: true,
+                        action: {
+                            isOpen = false
+                            onAddColor(internalSearchText)
+                        }
+                    )
+                    
+                    // Separator after add option
+                    if !filteredColors.isEmpty {
+                        Divider()
+                            .background(Color.secondary.opacity(0.4))
+                            .frame(height: 0.5)
+                            .padding(.horizontal, 16)
+                    }
+                }
+            }
+            
+            // Existing colors - always use ScrollView for consistency
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(filteredColors.enumerated()), id: \.element) { index, color in
+                        VStack(spacing: 0) {
+                            cleanColorRow(
+                                title: color,
+                                isAddOption: false,
+                                action: {
+                                    print("Selected color: \(color)")
+                                    isOpen = false
+                                    selectedColor = color
+                                    searchText = color
+                                }
+                            )
+                            
+                            // Divider between items (except for the last one)
+                            if index < filteredColors.count - 1 {
+                                Divider()
+                                    .background(Color.secondary.opacity(0.4))
+                                    .frame(height: 0.5)
+                                    .padding(.horizontal, 16)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(.regularMaterial)
+                .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
+        )
+        .frame(maxHeight: dynamicHeight)
+        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+    }
+    
+    // MARK: - Positioned Dropdown
+    private var positionedDropdown: some View {
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                // Add color option (if applicable)
+                if shouldShowAddOption {
+                    VStack(spacing: 0) {
+                        cleanColorRow(
+                            title: "Add '\(internalSearchText)'",
+                            isAddOption: true,
+                            action: {
+                                isOpen = false
+                                onAddColor(internalSearchText)
+                            }
+                        )
+                        
+                        // Separator after add option
+                        if !filteredColors.isEmpty {
+                            Divider()
+                                .background(Color.secondary.opacity(0.4))
+                                .frame(height: 0.5)
+                                .padding(.horizontal, 16)
+                        }
+                    }
+                }
+                
+                // Existing colors in ScrollView (macOS only)
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(filteredColors.enumerated()), id: \.element) { index, color in
+                            VStack(spacing: 0) {
+                                cleanColorRow(
+                                    title: color,
+                                    isAddOption: false,
+                                    action: {
+                                        print("Selected color: \(color)")
+                                        isOpen = false
+                                        selectedColor = color
+                                        searchText = color
+                                    }
+                                )
+                                .onAppear {
+                                    print("Rendering color row: \(color)")
+                                }
+                                
+                                // Divider between items
+                                if index < filteredColors.count - 1 {
+                                    Divider()
+                                        .background(Color.secondary.opacity(0.4))
+                                        .frame(height: 0.5)
+                                        .padding(.horizontal, 16)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: dynamicMacOSDropdownHeight)
+            .background(.regularMaterial)
+            .cornerRadius(8)
+            .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
+            .frame(width: buttonFrame.width)
+            .offset(
+                x: buttonFrame.minX,
+                y: buttonFrame.maxY + 5
+            )
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .allowsHitTesting(true)
+    }
+    
+    // MARK: - Dynamic Height Calculation (macOS)
+    private var dynamicMacOSDropdownHeight: CGFloat {
+        let itemHeight: CGFloat = 48
+        let addOptionHeight: CGFloat = shouldShowAddOption ? itemHeight : 0
+        let colorCount = filteredColors.count
+        
+        if colorCount <= 4 {
+            // For small lists, calculate exact height
+            let colorHeight = CGFloat(colorCount) * itemHeight
+            let totalHeight = addOptionHeight + colorHeight
+            return min(totalHeight, 240)
+        } else {
+            // For larger lists, use fixed height with scroll
+            return min(addOptionHeight + (4 * itemHeight), 240)
+        }
+    }
+    
+    // MARK: - Dynamic Height Calculation
+    private var dynamicHeight: CGFloat {
+        let itemHeight: CGFloat = 50
+        let addOptionHeight: CGFloat = shouldShowAddOption ? itemHeight : 0
+        
+        if filteredColors.count <= 3 {
+            // For smaller lists, calculate exact height
+            let colorHeight = CGFloat(filteredColors.count) * itemHeight
+            let totalHeight = addOptionHeight + colorHeight
+            return min(totalHeight, 250)
+        } else {
+            // For larger lists, use fixed height with scroll
+            return min(addOptionHeight + (3 * itemHeight), 250)
+        }
+    }
+    
+    // MARK: - Color Row Views
+    
+    private func cleanColorRow(title: String, isAddOption: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                if isAddOption {
+                    Image(systemName: "plus.circle.fill")
+                        .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40)) // App's green theme
+                        .font(.system(size: 16, weight: .medium))
+                }
+                
+                Text(title)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(isAddOption ? Color(red: 0.20, green: 0.60, blue: 0.40) : .primary)
+                    .fontWeight(isAddOption ? .semibold : .medium)
+                
+                Spacer()
+                
+                if !isAddOption && selectedColor == title {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40)) // App's green theme
+                        .font(.system(size: 16, weight: .medium))
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                Rectangle()
+                    .fill(Color.clear)
+                    .contentShape(Rectangle())
+            )
+        }
+        .buttonStyle(PlainButtonStyle())
+        .onHover { isHovering in
+            // Subtle hover effect for better UX
+        }
+    }
+}
+
+// MARK: - Capacity Dropdown Button
+struct CapacityDropdownButton: View {
+    @Binding var searchText: String
+    @Binding var selectedCapacity: String
+    @Binding var isOpen: Bool
+    @Binding var buttonFrame: CGRect
+    @FocusState.Binding var isFocused: Bool
+    @Binding var internalSearchText: String
+    @Binding var capacityUnit: String
+    let isLoading: Bool
+    
+    var body: some View {
+        ZStack {
+            // Main TextField with padding for the button
+            TextField("Choose an option", text: $searchText)
+                .textFieldStyle(PlainTextFieldStyle())
+                .font(.system(size: 18, weight: .medium))
+                .focused($isFocused)
+                .padding(.horizontal, 20)
+                .padding(.trailing, 120) // Extra padding for unit buttons and dropdown button area
+                .padding(.vertical, 16)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(.regularMaterial)
+                )
+                .submitLabel(.done)
+                #if os(iOS)
+                .keyboardType(.numberPad)
+                #endif
+                .onSubmit {
+                    isFocused = false
+                }
+                .onChange(of: searchText) { newValue in
+                    // Sync internal search with display text
+                    internalSearchText = newValue
+                    if !newValue.isEmpty && !isOpen && newValue != selectedCapacity {
+                        isOpen = true
+                    }
+                }
+                .onChange(of: isOpen) { newValue in
+                    // Clear internal search when opening dropdown to show full list
+                    if newValue {
+                        internalSearchText = ""
+                    }
+                }
+                .onChange(of: isFocused) { focused in
+                    if focused && !isOpen {
+                        isOpen = true
+                    }
+                }
+            
+            // Unit selection buttons and dropdown button positioned on the right
+            HStack(spacing: 8) {
+                Spacer()
+                
+                // Unit selection buttons
+                HStack(spacing: 4) {
+                    Button(action: {
+                        capacityUnit = "GB"
+                    }) {
+                        Text("GB")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(capacityUnit == "GB" ? .white : .secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(capacityUnit == "GB" ? Color.blue : Color.secondary.opacity(0.1))
+                            )
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    
+                    Button(action: {
+                        capacityUnit = "TB"
+                    }) {
+                        Text("TB")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(capacityUnit == "TB" ? .white : .secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(capacityUnit == "TB" ? Color.blue : Color.secondary.opacity(0.1))
+                            )
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+                
+                if isLoading {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                        .padding(.trailing, 20)
+                } else {
+                    Button(action: {
+                        print("Capacity dropdown button clicked, isOpen before: \(isOpen)")
+                        withAnimation {
+                            isOpen.toggle()
+                        }
+                        print("Capacity dropdown button clicked, isOpen after: \(isOpen)")
+                        if isOpen {
+                            isFocused = false
+                        }
+                    }) {
+                        Image(systemName: isOpen ? "chevron.up" : "chevron.down")
+                            .foregroundColor(.secondary)
+                            .font(.system(size: 14))
+                            .frame(width: 40, height: 40) // Larger clickable area
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .onHover { isHovering in
+                        #if os(macOS)
+                        if isHovering {
+                            NSCursor.pointingHand.set()
+                        } else {
+                            NSCursor.arrow.set()
+                        }
+                        #endif
+                    }
+                    .padding(.trailing, 10)
+                }
+            }
+        }
+            .background(
+                GeometryReader { geometry in
+                    Color.clear
+                        .onAppear {
+                            buttonFrame = geometry.frame(in: .global)
+                            print("Capacity button frame captured: \(buttonFrame)")
+                        }
+                        .onChange(of: geometry.frame(in: .global)) { newFrame in
+                            buttonFrame = newFrame
+                        }
+                }
+            )
+    }
+}
+
+// MARK: - Capacity Dropdown Overlay
+struct CapacityDropdownOverlay: View {
+    @Binding var isOpen: Bool
+    @Binding var selectedCapacity: String
+    @Binding var searchText: String
+    @Binding var internalSearchText: String
+    let capacities: [String]
+    let buttonFrame: CGRect
+    let onAddCapacity: (String) -> Void
+    
+    private var filteredCapacities: [String] {
+        print("CapacityDropdownOverlay - Total capacities: \(capacities.count), capacities: \(capacities)")
+        print("CapacityDropdownOverlay - Internal search text: '\(internalSearchText)'")
+        
+        if internalSearchText.isEmpty {
+            let allCapacities = capacities.sorted()
+            print("CapacityDropdownOverlay - Showing all capacities: \(allCapacities)")
+            return allCapacities // Show all capacities sorted alphabetically when no search text
+        } else {
+            let filtered = capacities.filter { capacity in
+                capacity.localizedCaseInsensitiveContains(internalSearchText)
+            }.sorted()
+            print("CapacityDropdownOverlay - Filtered capacities: \(filtered)")
+            return filtered
+        }
+    }
+    
+    private var shouldShowAddOption: Bool {
+        return !internalSearchText.isEmpty && !capacities.contains { $0.localizedCaseInsensitiveCompare(internalSearchText) == .orderedSame }
+    }
+    
+    var body: some View {
+        Group {
+            #if os(iOS)
+            // Inline dropdown that pushes content down (iOS only)
+            inlineDropdown
+            #else
+            // Positioned dropdown for macOS
+            positionedDropdown
+            #endif
+        }
+        .onAppear {
+            print("CapacityDropdownOverlay appeared with \(capacities.count) capacities: \(capacities)")
+            print("CapacityDropdownOverlay buttonFrame: \(buttonFrame)")
+        }
+    }
+    
+    // MARK: - Inline Dropdown
+    private var inlineDropdown: some View {
+        VStack(spacing: 0) {
+            // Add capacity option (if applicable)
+            if shouldShowAddOption {
+                VStack(spacing: 0) {
+                    cleanCapacityRow(
+                        title: "Add '\(internalSearchText)'",
+                        isAddOption: true,
+                        action: {
+                            isOpen = false
+                            onAddCapacity(internalSearchText)
+                        }
+                    )
+                    
+                    // Separator after add option
+                    if !filteredCapacities.isEmpty {
+                        Divider()
+                            .background(Color.secondary.opacity(0.4))
+                            .frame(height: 0.5)
+                            .padding(.horizontal, 16)
+                    }
+                }
+            }
+            
+            // Existing capacities - always use ScrollView for consistency
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(filteredCapacities.enumerated()), id: \.element) { index, capacity in
+                        VStack(spacing: 0) {
+                            cleanCapacityRow(
+                                title: capacity,
+                                isAddOption: false,
+                                action: {
+                                    print("Selected capacity: \(capacity)")
+                                    isOpen = false
+                                    selectedCapacity = capacity
+                                    searchText = capacity
+                                }
+                            )
+                            
+                            // Divider between items (except for the last one)
+                            if index < filteredCapacities.count - 1 {
+                                Divider()
+                                    .background(Color.secondary.opacity(0.4))
+                                    .frame(height: 0.5)
+                                    .padding(.horizontal, 16)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(.regularMaterial)
+                .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
+        )
+        .frame(maxHeight: dynamicHeight)
+        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+    }
+    
+    // MARK: - Positioned Dropdown (macOS)
+    private var positionedDropdown: some View {
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                // Add capacity option (if applicable)
+                if shouldShowAddOption {
+                    VStack(spacing: 0) {
+                        cleanCapacityRow(
+                            title: "Add '\(internalSearchText)'",
+                            isAddOption: true,
+                            action: {
+                                isOpen = false
+                                onAddCapacity(internalSearchText)
+                            }
+                        )
+                        
+                        // Separator after add option
+                        if !filteredCapacities.isEmpty {
+                            Divider()
+                                .background(Color.secondary.opacity(0.4))
+                                .frame(height: 0.5)
+                                .padding(.horizontal, 16)
+                        }
+                    }
+                }
+                
+                // Existing capacities in ScrollView (macOS only)
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(filteredCapacities.enumerated()), id: \.element) { index, capacity in
+                            VStack(spacing: 0) {
+                                cleanCapacityRow(
+                                    title: capacity,
+                                    isAddOption: false,
+                                    action: {
+                                        print("Selected capacity: \(capacity)")
+                                        isOpen = false
+                                        selectedCapacity = capacity
+                                        searchText = capacity
+                                    }
+                                )
+                                .onAppear {
+                                    print("Rendering capacity row: \(capacity)")
+                                }
+                                
+                                // Divider between items
+                                if index < filteredCapacities.count - 1 {
+                                    Divider()
+                                        .background(Color.secondary.opacity(0.4))
+                                        .frame(height: 0.5)
+                                        .padding(.horizontal, 16)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: dynamicMacOSDropdownHeight)
+            .background(.regularMaterial)
+            .cornerRadius(8)
+            .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
+            .frame(width: buttonFrame.width)
+            .offset(
+                x: buttonFrame.minX,
+                y: buttonFrame.maxY + 5
+            )
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .allowsHitTesting(true)
+    }
+    
+    // MARK: - Dynamic Height Calculation (macOS)
+    private var dynamicMacOSDropdownHeight: CGFloat {
+        let itemHeight: CGFloat = 48
+        let addOptionHeight: CGFloat = shouldShowAddOption ? itemHeight : 0
+        let capacityCount = filteredCapacities.count
+        
+        if capacityCount <= 4 {
+            // For small lists, calculate exact height
+            let capacityHeight = CGFloat(capacityCount) * itemHeight
+            let totalHeight = addOptionHeight + capacityHeight
+            return min(totalHeight, 240)
+        } else {
+            // For larger lists, use fixed height with scroll
+            return min(addOptionHeight + (4 * itemHeight), 240)
+        }
+    }
+    
+    // MARK: - Dynamic Height Calculation
+    private var dynamicHeight: CGFloat {
+        let itemHeight: CGFloat = 50
+        let addOptionHeight: CGFloat = shouldShowAddOption ? itemHeight : 0
+        
+        if filteredCapacities.count <= 3 {
+            // For smaller lists, calculate exact height
+            let capacityHeight = CGFloat(filteredCapacities.count) * itemHeight
+            let totalHeight = addOptionHeight + capacityHeight
+            return min(totalHeight, 250)
+        } else {
+            // For larger lists, use fixed height with scroll
+            return min(addOptionHeight + (3 * itemHeight), 250)
+        }
+    }
+    
+    // MARK: - Capacity Row Views
+    
+    private func cleanCapacityRow(title: String, isAddOption: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                if isAddOption {
+                    Image(systemName: "plus.circle.fill")
+                        .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40)) // App's green theme
+                        .font(.system(size: 16, weight: .medium))
+                }
+                
+                Text(title)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(isAddOption ? Color(red: 0.20, green: 0.60, blue: 0.40) : .primary)
+                    .fontWeight(isAddOption ? .semibold : .medium)
+                
+                Spacer()
+                
+                if !isAddOption && selectedCapacity == title {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40)) // App's green theme
+                        .font(.system(size: 16, weight: .medium))
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                Rectangle()
+                    .fill(Color.clear)
+                    .contentShape(Rectangle())
+            )
+        }
+        .buttonStyle(PlainButtonStyle())
+        .onHover { isHovering in
+            // Subtle hover effect for better UX
+        }
+    }
+}
+
+
 #Preview {
-    AddProductDialog(isPresented: .constant(true), onDismiss: nil)
+    AddProductDialog(isPresented: .constant(true), onDismiss: nil, onSave: { _ in })
 }

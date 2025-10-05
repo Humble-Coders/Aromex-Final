@@ -1,5 +1,16 @@
 import Foundation
 import SwiftUI
+#if os(iOS)
+import UIKit
+typealias KeyboardType = UIKeyboardType
+#else
+import AppKit
+enum KeyboardType {
+    case `default`
+    case numberPad
+    case decimalPad
+}
+#endif
 
 enum EntityType: String, CaseIterable {
     case customer = "Customer"
@@ -39,4 +50,49 @@ struct EntityProfile: Identifiable {
     let balance: Double
     let address: String
     let notes: String
+}
+
+// Represents a phone item added in the Purchase flow
+struct PhoneItem: Identifiable, Hashable {
+    let id: UUID
+    let brand: String
+    let model: String
+    let capacity: String
+    let capacityUnit: String // GB or TB
+    let color: String
+    let carrier: String
+    let status: String
+    let storageLocation: String
+    let imeis: [String]
+    let unitCost: Double
+    
+    // Initializer for new items (generates new UUID)
+    init(brand: String, model: String, capacity: String, capacityUnit: String, color: String, carrier: String, status: String, storageLocation: String, imeis: [String], unitCost: Double) {
+        self.id = UUID()
+        self.brand = brand
+        self.model = model
+        self.capacity = capacity
+        self.capacityUnit = capacityUnit
+        self.color = color
+        self.carrier = carrier
+        self.status = status
+        self.storageLocation = storageLocation
+        self.imeis = imeis
+        self.unitCost = unitCost
+    }
+    
+    // Initializer for editing existing items (preserves existing UUID)
+    init(id: UUID, brand: String, model: String, capacity: String, capacityUnit: String, color: String, carrier: String, status: String, storageLocation: String, imeis: [String], unitCost: Double) {
+        self.id = id
+        self.brand = brand
+        self.model = model
+        self.capacity = capacity
+        self.capacityUnit = capacityUnit
+        self.color = color
+        self.carrier = carrier
+        self.status = status
+        self.storageLocation = storageLocation
+        self.imeis = imeis
+        self.unitCost = unitCost
+    }
 }

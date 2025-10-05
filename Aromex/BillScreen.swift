@@ -2,8 +2,6 @@
 //  BillScreen.swift
 //  Aromex
 //
-//  Created by User on 9/17/25.
-//
 
 import SwiftUI
 import WebKit
@@ -20,6 +18,7 @@ struct BillScreen: View {
     let onClose: (() -> Void)?
     @State private var isLoading = true
     @State private var htmlContent = ""
+    @State private var htmlPages: [String] = []
     @State private var showPDFShare = false
     @State private var pdfData: Data?
     @State private var errorMessage: String?
@@ -45,7 +44,6 @@ struct BillScreen: View {
     
     var body: some View {
         ZStack {
-            // Full screen background
             Color.clear.ignoresSafeArea(.all)
             
             if isLoading {
@@ -80,7 +78,6 @@ struct BillScreen: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 VStack(spacing: 0) {
-                    // Header with title and done button
                     HStack {
                         Text("Purchase Invoice")
                             .font(.title2)
@@ -96,18 +93,16 @@ struct BillScreen: View {
                     .padding()
                     .background(.regularMaterial)
                     
-                    // Bill WebView - scrollable and zoomable content area
                     ZoomableScrollView(zoomScale: $zoomScale, scrollOffset: $scrollOffset) {
-                        BillWebView(htmlContent: htmlContent) { pdfData in
+                        BillWebView(htmlPages: htmlPages.isEmpty ? [htmlContent] : htmlPages) { pdfData in
                             DispatchQueue.main.async {
                                 self.pdfData = pdfData
                             }
                         }
-                        .frame(width: 595, height: 842) // A4 size in points
+                        .frame(width: 595, height: 842)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     
-                    // Action buttons - fixed height at bottom
                     HStack(spacing: 16) {
                         Button(action: {
                             onClose?()
@@ -173,25 +168,18 @@ struct BillScreen: View {
         errorMessage = nil
         
         guard !purchaseId.isEmpty else {
-            print("❌ BillScreen: Empty purchase ID provided")
             errorMessage = "Invalid purchase ID"
             isLoading = false
             return
         }
         
-        print("🔍 BillScreen: Starting to load bill for purchase ID: \(purchaseId) (attempt \(currentRetry + 1)/\(maxRetries + 1))")
-        
         Task {
             do {
                 let db = Firestore.firestore()
-                print("🔍 BillScreen: Fetching purchase document with ID: \(purchaseId)")
                 let purchaseDoc = try await db.collection("Purchases").document(purchaseId).getDocument()
                 
                 guard purchaseDoc.exists, let data = purchaseDoc.data() else {
-                    print("❌ BillScreen: Purchase document not found or has no data for ID: \(purchaseId)")
-                    
                     if currentRetry < maxRetries {
-                        print("🔄 BillScreen: Retrying in 1 second... (attempt \(currentRetry + 1)/\(maxRetries + 1))")
                         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                             self.loadBillWithRetry(maxRetries: maxRetries, currentRetry: currentRetry + 1)
                         }
@@ -205,28 +193,20 @@ struct BillScreen: View {
                     return
                 }
                 
-                print("✅ BillScreen: Purchase document found, data keys: \(data.keys.sorted())")
-                
                 let purchase = try Purchase.fromFirestore(data: data, id: purchaseId)
-                print("✅ BillScreen: Purchase data decoded successfully")
                 
                 let billGenerator = BillGenerator()
-                let html = try billGenerator.generateBillHTML(for: purchase)
-                print("✅ BillScreen: HTML generated successfully, length: \(html.count) characters")
+                let htmlPages = try billGenerator.generateBillHTML(for: purchase)
                 
                 await MainActor.run {
                     self.purchase = purchase
-                    self.htmlContent = html
+                    self.htmlPages = htmlPages
+                    self.htmlContent = htmlPages.first ?? ""
                     self.isLoading = false
-                    print("✅ BillScreen: UI updated successfully")
                 }
                 
             } catch {
-                print("❌ BillScreen: Error loading bill: \(error)")
-                print("❌ BillScreen: Error details: \(error.localizedDescription)")
-                
                 if currentRetry < maxRetries && !error.localizedDescription.contains("template") {
-                    print("🔄 BillScreen: Retrying in 1 second due to error... (attempt \(currentRetry + 1)/\(maxRetries + 1))")
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                         self.loadBillWithRetry(maxRetries: maxRetries, currentRetry: currentRetry + 1)
                     }
@@ -243,24 +223,19 @@ struct BillScreen: View {
     
 #if os(macOS)
 private func sharePDFOnMacOS(pdfData: Data) {
-    // Create a temporary file
     let tempDirectory = FileManager.default.temporaryDirectory
     let fileName = "Purchase_Invoice_\(self.purchase?.orderNumber ?? 0).pdf"
     let tempURL = tempDirectory.appendingPathComponent(fileName)
     
     do {
-        // Write PDF to temporary file first
         try pdfData.write(to: tempURL)
         
-        // Use NSSharingService which is more SwiftUI-friendly
         DispatchQueue.main.async {
             let sharingService = NSSharingService(named: .sendViaAirDrop)
             
             if sharingService != nil {
-                // If sharing service available, use it
                 NSWorkspace.shared.selectFile(tempURL.path, inFileViewerRootedAtPath: tempDirectory.path)
             } else {
-                // Fallback: Show in Finder
                 NSWorkspace.shared.activateFileViewerSelecting([tempURL])
             }
         }
@@ -415,7 +390,7 @@ struct ZoomableScrollViewRepresentable<Content: View>: NSViewRepresentable {
 
 #if os(iOS)
 struct BillWebView: UIViewRepresentable {
-    let htmlContent: String
+    let htmlPages: [String]
     let onPDFGenerated: (Data?) -> Void
     
     func makeUIView(context: Context) -> WKWebView {
@@ -425,7 +400,9 @@ struct BillWebView: UIViewRepresentable {
     }
     
     func updateUIView(_ webView: WKWebView, context: Context) {
-        webView.loadHTMLString(htmlContent, baseURL: nil)
+        if let firstPage = htmlPages.first {
+            webView.loadHTMLString(firstPage, baseURL: nil)
+        }
     }
     
     func makeCoordinator() -> Coordinator {
@@ -434,27 +411,39 @@ struct BillWebView: UIViewRepresentable {
     
     class Coordinator: NSObject, WKNavigationDelegate {
         let parent: BillWebView
+        private var currentPageIndex = 0
+        private var pdfPages: [Data] = []
         
         init(_ parent: BillWebView) {
             self.parent = parent
         }
         
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                self.generatePDF(from: webView)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self.generatePDFForCurrentPage(from: webView)
             }
         }
         
-        private func generatePDF(from webView: WKWebView) {
+        private func generatePDFForCurrentPage(from webView: WKWebView) {
             let config = WKPDFConfiguration()
             config.rect = .null
             
-            webView.createPDF(configuration: config) { result in
+            webView.createPDF(configuration: config) { [weak self] result in
+                guard let self = self else { return }
+                
                 switch result {
                 case .success(let data):
-                    DispatchQueue.main.async {
-                        self.parent.onPDFGenerated(data)
+                    self.pdfPages.append(data)
+                    self.currentPageIndex += 1
+                    
+                    if self.currentPageIndex < self.parent.htmlPages.count {
+                        DispatchQueue.main.async {
+                            webView.loadHTMLString(self.parent.htmlPages[self.currentPageIndex], baseURL: nil)
+                        }
+                    } else {
+                        self.mergePDFs()
                     }
+                    
                 case .failure(let error):
                     print("PDF generation failed: \(error)")
                     DispatchQueue.main.async {
@@ -463,12 +452,30 @@ struct BillWebView: UIViewRepresentable {
                 }
             }
         }
+        
+        private func mergePDFs() {
+            let mergedPDF = PDFDocument()
+            
+            for pdfData in pdfPages {
+                if let pdfDoc = PDFDocument(data: pdfData) {
+                    for pageIndex in 0..<pdfDoc.pageCount {
+                        if let page = pdfDoc.page(at: pageIndex) {
+                            mergedPDF.insert(page, at: mergedPDF.pageCount)
+                        }
+                    }
+                }
+            }
+            
+            DispatchQueue.main.async {
+                self.parent.onPDFGenerated(mergedPDF.dataRepresentation())
+            }
+        }
     }
 }
 
 #else
 struct BillWebView: NSViewRepresentable {
-    let htmlContent: String
+    let htmlPages: [String]
     let onPDFGenerated: (Data?) -> Void
     
     func makeNSView(context: Context) -> WKWebView {
@@ -478,7 +485,9 @@ struct BillWebView: NSViewRepresentable {
     }
     
     func updateNSView(_ webView: WKWebView, context: Context) {
-        webView.loadHTMLString(htmlContent, baseURL: nil)
+        if let firstPage = htmlPages.first {
+            webView.loadHTMLString(firstPage, baseURL: nil)
+        }
     }
     
     func makeCoordinator() -> Coordinator {
@@ -487,123 +496,153 @@ struct BillWebView: NSViewRepresentable {
     
     class Coordinator: NSObject, WKNavigationDelegate {
         let parent: BillWebView
+        private var currentPageIndex = 0
+        private var pdfPages: [Data] = []
         
         init(_ parent: BillWebView) {
             self.parent = parent
         }
         
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                self.generatePDF(from: webView)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self.generatePDFForCurrentPage(from: webView)
             }
         }
         
-        private func generatePDF(from webView: WKWebView) {
+        private func generatePDFForCurrentPage(from webView: WKWebView) {
             let config = WKPDFConfiguration()
             config.rect = .null
             
-            webView.createPDF(configuration: config) { result in
+            webView.createPDF(configuration: config) { [weak self] result in
+                guard let self = self else { return }
+                
                 switch result {
                 case .success(let data):
-                    DispatchQueue.main.async {
-                        self.parent.onPDFGenerated(data)
+                    self.pdfPages.append(data)
+                    self.currentPageIndex += 1
+                    
+                    if self.currentPageIndex < self.parent.htmlPages.count {
+                        DispatchQueue.main.async {
+                            webView.loadHTMLString(self.parent.htmlPages[self.currentPageIndex], baseURL: nil)
+                        }
+                    } else {
+                                            self.mergePDFs()
+                                        }
+                                        
+                                    case .failure(let error):
+                                        print("PDF generation failed: \(error)")
+                                        DispatchQueue.main.async {
+                                            self.parent.onPDFGenerated(nil)
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            private func mergePDFs() {
+                                let mergedPDF = PDFDocument()
+                                
+                                for pdfData in pdfPages {
+                                    if let pdfDoc = PDFDocument(data: pdfData) {
+                                        for pageIndex in 0..<pdfDoc.pageCount {
+                                            if let page = pdfDoc.page(at: pageIndex) {
+                                                mergedPDF.insert(page, at: mergedPDF.pageCount)
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                DispatchQueue.main.async {
+                                    self.parent.onPDFGenerated(mergedPDF.dataRepresentation())
+                                }
+                            }
+                        }
                     }
-                case .failure(let error):
-                    print("PDF generation failed: \(error)")
-                    DispatchQueue.main.async {
-                        self.parent.onPDFGenerated(nil)
+                    #endif
+
+                    #if os(iOS)
+                    struct PDFShareView: UIViewControllerRepresentable {
+                        let pdfData: Data
+                        
+                        func makeUIViewController(context: Context) -> UIActivityViewController {
+                            let activityVC = UIActivityViewController(activityItems: [pdfData], applicationActivities: nil)
+                            return activityVC
+                        }
+                        
+                        func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
                     }
-                }
-            }
-        }
-    }
-}
-#endif
+                    #endif
 
-#if os(iOS)
-struct PDFShareView: UIViewControllerRepresentable {
-    let pdfData: Data
-    
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        let activityVC = UIActivityViewController(activityItems: [pdfData], applicationActivities: nil)
-        return activityVC
-    }
-    
-    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
-}
-#endif
+                    // MARK: - Purchase Model
+                    struct Purchase {
+                        let id: String
+                        let transactionDate: Date
+                        let orderNumber: Int
+                        let subtotal: Double
+                        let gstPercentage: Double
+                        let gstAmount: Double
+                        let pstPercentage: Double
+                        let pstAmount: Double
+                        let adjustmentAmount: Double
+                        let adjustmentUnit: String
+                        let grandTotal: Double
+                        let notes: String
+                        let purchasedPhones: [[String: Any]]
+                        let paymentMethods: [String: Any]
+                        let supplierName: String?
+                        let supplierAddress: String?
+                        let middlemanName: String?
+                        let middlemanPayment: [String: Any]?
+                        
+                        static func fromFirestore(data: [String: Any], id: String) throws -> Purchase {
+                            guard let transactionDate = (data["transactionDate"] as? Timestamp)?.dateValue(),
+                                  let orderNumber = data["orderNumber"] as? Int,
+                                  let subtotal = data["subtotal"] as? Double,
+                                  let gstPercentage = data["gstPercentage"] as? Double,
+                                  let gstAmount = data["gstAmount"] as? Double,
+                                  let pstPercentage = data["pstPercentage"] as? Double,
+                                  let pstAmount = data["pstAmount"] as? Double,
+                                  let adjustmentAmount = data["adjustmentAmount"] as? Double,
+                                  let adjustmentUnit = data["adjustmentUnit"] as? String,
+                                  let grandTotal = data["grandTotal"] as? Double,
+                                  let notes = data["notes"] as? String,
+                                  let purchasedPhones = data["purchasedPhones"] as? [[String: Any]],
+                                  let paymentMethods = data["paymentMethods"] as? [String: Any] else {
+                                throw PurchaseError.invalidData
+                            }
+                            
+                            let supplierName = data["supplierName"] as? String
+                            let supplierAddress = data["supplierAddress"] as? String
+                            let middlemanName = data["middlemanName"] as? String
+                            let middlemanPayment = data["middlemanPayment"] as? [String: Any]
+                            
+                            return Purchase(
+                                id: id,
+                                transactionDate: transactionDate,
+                                orderNumber: orderNumber,
+                                subtotal: subtotal,
+                                gstPercentage: gstPercentage,
+                                gstAmount: gstAmount,
+                                pstPercentage: pstPercentage,
+                                pstAmount: pstAmount,
+                                adjustmentAmount: adjustmentAmount,
+                                adjustmentUnit: adjustmentUnit,
+                                grandTotal: grandTotal,
+                                notes: notes,
+                                purchasedPhones: purchasedPhones,
+                                paymentMethods: paymentMethods,
+                                supplierName: supplierName,
+                                supplierAddress: supplierAddress,
+                                middlemanName: middlemanName,
+                                middlemanPayment: middlemanPayment
+                            )
+                        }
+                    }
 
-// MARK: - Purchase Model
-struct Purchase {
-    let id: String
-    let transactionDate: Date
-    let orderNumber: Int
-    let subtotal: Double
-    let gstPercentage: Double
-    let gstAmount: Double
-    let pstPercentage: Double
-    let pstAmount: Double
-    let adjustmentAmount: Double
-    let adjustmentUnit: String
-    let grandTotal: Double
-    let notes: String
-    let purchasedPhones: [[String: Any]]
-    let paymentMethods: [String: Any]
-    let supplierName: String?
-    let supplierAddress: String?
-    let middlemanName: String?
-    let middlemanPayment: [String: Any]?
-    
-    static func fromFirestore(data: [String: Any], id: String) throws -> Purchase {
-        guard let transactionDate = (data["transactionDate"] as? Timestamp)?.dateValue(),
-              let orderNumber = data["orderNumber"] as? Int,
-              let subtotal = data["subtotal"] as? Double,
-              let gstPercentage = data["gstPercentage"] as? Double,
-              let gstAmount = data["gstAmount"] as? Double,
-              let pstPercentage = data["pstPercentage"] as? Double,
-              let pstAmount = data["pstAmount"] as? Double,
-              let adjustmentAmount = data["adjustmentAmount"] as? Double,
-              let adjustmentUnit = data["adjustmentUnit"] as? String,
-              let grandTotal = data["grandTotal"] as? Double,
-              let notes = data["notes"] as? String,
-              let purchasedPhones = data["purchasedPhones"] as? [[String: Any]],
-              let paymentMethods = data["paymentMethods"] as? [String: Any] else {
-            throw PurchaseError.invalidData
-        }
-        
-        let supplierName = data["supplierName"] as? String
-        let supplierAddress = data["supplierAddress"] as? String
-        let middlemanName = data["middlemanName"] as? String
-        let middlemanPayment = data["middlemanPayment"] as? [String: Any]
-        
-        return Purchase(
-            id: id,
-            transactionDate: transactionDate,
-            orderNumber: orderNumber,
-            subtotal: subtotal,
-            gstPercentage: gstPercentage,
-            gstAmount: gstAmount,
-            pstPercentage: pstPercentage,
-            pstAmount: pstAmount,
-            adjustmentAmount: adjustmentAmount,
-            adjustmentUnit: adjustmentUnit,
-            grandTotal: grandTotal,
-            notes: notes,
-            purchasedPhones: purchasedPhones,
-            paymentMethods: paymentMethods,
-            supplierName: supplierName,
-            supplierAddress: supplierAddress,
-            middlemanName: middlemanName,
-            middlemanPayment: middlemanPayment
-        )
-    }
-}
+                    enum PurchaseError: Error {
+                        case invalidData
+                        case firestoreError(String)
+                    }
 
-enum PurchaseError: Error {
-    case invalidData
-    case firestoreError(String)
-}
-
-#Preview {
-    BillScreen(purchaseId: "sample-purchase-id")
-}
+                    #Preview {
+                        BillScreen(purchaseId: "sample-purchase-id")
+                    }

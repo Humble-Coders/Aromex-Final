@@ -1,31 +1,107 @@
-//
-//  BillGenerator.swift
-//  Aromex
-//
-//  Created by User on 9/17/25.
-//
-
 import Foundation
+import PDFKit
 
 class BillGenerator {
     
-    func generateBillHTML(for purchase: Purchase) throws -> String {
-        // Load HTML template
-        guard let templatePath = Bundle.main.path(forResource: "invoice_template", ofType: "html"),
+    // First page can now hold 16 items since payment section moved to last page
+    private let maxItemsFirstPageComplete = 8  // Complete invoice on one page
+    private let maxItemsFirstPageOnly = 16     // First page when splitting
+    private let maxItemsPerContinuationPage = 18
+    
+    func generateBillHTML(for purchase: Purchase) throws -> [String] {
+        let itemCount = purchase.purchasedPhones.count
+        
+        if itemCount <= maxItemsFirstPageComplete {
+            return [try generateSinglePageHTML(for: purchase)]
+        } else {
+            return try generateMultiPageHTMLArray(for: purchase)
+        }
+    }
+    
+    private func generateSinglePageHTML(for purchase: Purchase) throws -> String {
+        guard let templatePath = Bundle.main.path(forResource: "invoice_single_page", ofType: "html"),
               let templateContent = try? String(contentsOfFile: templatePath, encoding: .utf8) else {
             throw BillGenerationError.templateNotFound
         }
         
-        // Format date
+        return try populateTemplate(templateContent, with: purchase, items: purchase.purchasedPhones)
+    }
+    
+    private func generateMultiPageHTMLArray(for purchase: Purchase) throws -> [String] {
+        var htmlPages: [String] = []
+        let allItems = purchase.purchasedPhones
+        
+        // First page with up to 16 items
+        let firstPageItems = Array(allItems.prefix(maxItemsFirstPageOnly))
+        let firstPageHTML = try generateFirstPage(for: purchase, items: firstPageItems)
+        htmlPages.append(firstPageHTML)
+        
+        var remainingItems = Array(allItems.dropFirst(maxItemsFirstPageOnly))
+        
+        // Middle pages with continuation items
+        while remainingItems.count > maxItemsPerContinuationPage {
+            let pageItems = Array(remainingItems.prefix(maxItemsPerContinuationPage))
+            let middlePageHTML = try generateMiddlePage(for: purchase, items: pageItems)
+            htmlPages.append(middlePageHTML)
+            remainingItems = Array(remainingItems.dropFirst(maxItemsPerContinuationPage))
+        }
+        
+        // Last page with remaining items + totals + payment
+        if !remainingItems.isEmpty {
+            let lastPageHTML = try generateLastPage(for: purchase, items: remainingItems)
+            htmlPages.append(lastPageHTML)
+        } else {
+            let footerPageHTML = try generateFooterPage(for: purchase)
+            htmlPages.append(footerPageHTML)
+        }
+        
+        return htmlPages
+    }
+    
+    private func generateFirstPage(for purchase: Purchase, items: [[String: Any]]) throws -> String {
+        guard let templatePath = Bundle.main.path(forResource: "invoice_first_page", ofType: "html"),
+              let templateContent = try? String(contentsOfFile: templatePath, encoding: .utf8) else {
+            throw BillGenerationError.templateNotFound
+        }
+        
+        return try populateTemplate(templateContent, with: purchase, items: items)
+    }
+    
+    private func generateMiddlePage(for purchase: Purchase, items: [[String: Any]]) throws -> String {
+        guard let templatePath = Bundle.main.path(forResource: "invoice_middle_page", ofType: "html"),
+              let templateContent = try? String(contentsOfFile: templatePath, encoding: .utf8) else {
+            throw BillGenerationError.templateNotFound
+        }
+        
+        return try populateTemplate(templateContent, with: purchase, items: items)
+    }
+    
+    private func generateLastPage(for purchase: Purchase, items: [[String: Any]]) throws -> String {
+        guard let templatePath = Bundle.main.path(forResource: "invoice_last_page", ofType: "html"),
+              let templateContent = try? String(contentsOfFile: templatePath, encoding: .utf8) else {
+            throw BillGenerationError.templateNotFound
+        }
+        
+        return try populateTemplate(templateContent, with: purchase, items: items)
+    }
+    
+    private func generateFooterPage(for purchase: Purchase) throws -> String {
+        guard let templatePath = Bundle.main.path(forResource: "invoice_footer_page", ofType: "html"),
+              let templateContent = try? String(contentsOfFile: templatePath, encoding: .utf8) else {
+            throw BillGenerationError.templateNotFound
+        }
+        
+        return try populateTemplate(templateContent, with: purchase, items: [])
+    }
+    
+    private func populateTemplate(_ template: String, with purchase: Purchase, items: [[String: Any]]) throws -> String {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "MMM dd, yyyy"
         let formattedDate = dateFormatter.string(from: purchase.transactionDate)
         
-        // Generate items HTML
-        let itemsHTML = generateItemsRows(for: purchase.purchasedPhones)
+        let itemsHTML = generateItemsRows(for: items)
         
-        // Replace placeholders
-        var html = templateContent
+        var html = template
         html = html.replacingOccurrences(of: "{{supplier_name}}", with: purchase.supplierName ?? "N/A")
         html = html.replacingOccurrences(of: "{{supplier_entity_type}}", with: "Supplier")
         html = html.replacingOccurrences(of: "{{order_number}}", with: "ORD-\(purchase.orderNumber)")
@@ -41,7 +117,6 @@ class BillGenerator {
         html = html.replacingOccurrences(of: "{{notes}}", with: purchase.notes.isEmpty ? "No additional notes" : purchase.notes)
         html = html.replacingOccurrences(of: "{{items}}", with: itemsHTML)
         
-        // Payment methods
         let cashPaid = purchase.paymentMethods["cash"] as? Double ?? 0.0
         let bankPaid = purchase.paymentMethods["bank"] as? Double ?? 0.0
         let creditCardPaid = purchase.paymentMethods["creditCard"] as? Double ?? 0.0
@@ -53,55 +128,6 @@ class BillGenerator {
         html = html.replacingOccurrences(of: "{{payment_credit_card}}", with: String(format: "%.2f", creditCardPaid))
         html = html.replacingOccurrences(of: "{{payment_total_paid}}", with: String(format: "%.2f", totalPaid))
         html = html.replacingOccurrences(of: "{{payment_remaining_credit}}", with: String(format: "%.2f", remainingCredit))
-        
-        // Generate middleman details HTML if applicable
-        var middlemanDetailsHTML = ""
-        if let middlemanName = purchase.middlemanName,
-           let middlemanPayment = purchase.middlemanPayment,
-           let middlemanAmount = middlemanPayment["amount"] as? Double,
-           let middlemanUnit = middlemanPayment["unit"] as? String,
-           let middlemanPaymentSplit = middlemanPayment["paymentSplit"] as? [String: Any] {
-            
-            let middlemanCash = middlemanPaymentSplit["cash"] as? Double ?? 0.0
-            let middlemanBank = middlemanPaymentSplit["bank"] as? Double ?? 0.0
-            let middlemanCreditCard = middlemanPaymentSplit["creditCard"] as? Double ?? 0.0
-            let middlemanCredit = middlemanPaymentSplit["credit"] as? Double ?? 0.0
-            
-            middlemanDetailsHTML = """
-            <div class="middleman-section">
-                <div class="section-title">Middleman Details</div>
-                <div class="middleman-info">
-                    <div class="middleman-details">
-                        <div><strong>Name:</strong> \(middlemanName)</div>
-                        <div><strong>Entity Type:</strong> Middleman</div>
-                        <div><strong>Amount:</strong> $\(String(format: "%.2f", middlemanAmount)) (\(middlemanUnit))</div>
-                    </div>
-                    <div class="middleman-payment">
-                        <div class="section-title">Payment Split</div>
-                        <div class="middleman-payment-grid">
-                            <div class="middleman-payment-item">
-                                <span>Cash:</span>
-                                <span>$\(String(format: "%.2f", middlemanCash))</span>
-                            </div>
-                            <div class="middleman-payment-item">
-                                <span>Bank:</span>
-                                <span>$\(String(format: "%.2f", middlemanBank))</span>
-                            </div>
-                            <div class="middleman-payment-item">
-                                <span>Credit Card:</span>
-                                <span>$\(String(format: "%.2f", middlemanCreditCard))</span>
-                            </div>
-                            <div class="middleman-payment-item">
-                                <span>Credit:</span>
-                                <span>$\(String(format: "%.2f", middlemanCredit))</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            """
-        }
-        html = html.replacingOccurrences(of: "{{middleman_details}}", with: middlemanDetailsHTML)
         
         return html
     }
@@ -115,13 +141,11 @@ class BillGenerator {
             let status = phoneData["status"] as? String ?? "N/A"
             let storageLocation = phoneData["storageLocation"] as? String ?? "N/A"
             let unitCost = phoneData["unitCost"] as? Double ?? 0.0
-            let total = unitCost // Since each phone is 1 unit
+            let total = unitCost
             
             rows += """
             <tr>
-                <td>
-                    <div class="item-description">\(description)</div>
-                </td>
+                <td><div class="item-description">\(description)</div></td>
                 <td class="text-center">\(imei)</td>
                 <td class="text-center">\(status)</td>
                 <td class="text-center">\(storageLocation)</td>
@@ -142,26 +166,19 @@ class BillGenerator {
         
         var description = "\(brand) \(model)"
         
-        // Add capacity if available
         if !capacity.isEmpty && capacity != "N/A" {
             description += ", \(capacity) \(capacityUnit)"
         }
         
-        // Add color if available
         if let color = phoneData["color"] as? String, !color.isEmpty {
             description += ", \(color)"
         }
         
-        // Add carrier if available
         if let carrier = phoneData["carrier"] as? String, !carrier.isEmpty {
             description += ", \(carrier)"
         }
         
         return description
-    }
-    
-    private func formatCurrency(_ amount: Double) -> String {
-        return String(format: "%.2f", amount)
     }
 }
 

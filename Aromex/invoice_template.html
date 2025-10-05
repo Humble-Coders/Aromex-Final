@@ -5,7 +5,7 @@
     <style>
         @page {
             size: A4;
-            margin: 5mm;
+            margin: 0;
         }
         
         * {
@@ -20,72 +20,49 @@
             line-height: 1.4;
             color: #1d1d1f;
             background: #ffffff;
-            width: 210mm;
-            margin: 0 auto;
-            padding: 10mm;
+            padding: 0;
+            margin: 0;
         }
         
         .invoice-container {
             width: 100%;
-            max-width: 190mm;
-            margin: 0 auto;
+            padding: 0;
         }
         
-        /* Force page breaks */
-        .page-break-after {
-            page-break-after: always;
-            break-after: page;
-        }
-        
-        .page-break-before {
-            page-break-before: always;
-            break-before: page;
-        }
-        
-        /* Prevent page breaks inside these elements */
+        /* Prevent page breaks inside critical elements */
         .header,
         .client-section,
-        .bill-to,
-        .ship-to,
         .section-title,
-        .middleman-section,
-        .notes-section,
-        .totals-section,
-        .totals-table,
-        .payment-section,
-        .payment-methods,
-        .payment-summary,
-        .footer {
+        .payment-item,
+        .summary-item,
+        .middleman-payment-item {
             page-break-inside: avoid;
             break-inside: avoid;
         }
         
+        /* Allow breaks between major sections */
+        .items-section,
+        .totals-section,
+        .payment-section,
+        .middleman-section,
+        .notes-section {
+            page-break-inside: auto;
+            break-inside: auto;
+        }
+        
+        /* Keep table rows together */
         .items-table tr {
             page-break-inside: avoid;
             break-inside: avoid;
         }
         
+        /* Ensure table header repeats on new pages */
         .items-table thead {
             display: table-header-group;
         }
         
         .items-table tbody {
             display: table-row-group;
-        }
-        
-        h1, h2, h3, .section-title {
-            page-break-after: avoid;
-            break-after: avoid;
-        }
-        
-        /* Ensure sections can break between them if needed */
-        .items-section,
-        .totals-section,
-        .payment-section {
-            page-break-before: auto;
-            break-before: auto;
-            page-break-after: auto;
-            break-after: auto;
         }
         
         /* Header */

@@ -23,15 +23,15 @@
             border-bottom: 2px solid #007AFF;
         }
         .company-info h1 { font-size: 26px; font-weight: 700; color: #007AFF; margin-bottom: 4px; }
-        .company-info .tagline { font-size: 11px; color: #86868b; }
+        .company-info .contact-line {
+            font-size: 9px;
+            color: #86868b;
+            line-height: 1.6;
+            margin-top: 6px;
+        }
         .invoice-meta { text-align: right; }
         .invoice-meta h2 { font-size: 20px; font-weight: 600; color: #1d1d1f; margin-bottom: 4px; }
         .invoice-meta .invoice-type { font-size: 10px; color: #86868b; margin-bottom: 6px; }
-        .invoice-meta .invoice-number { font-size: 14px; color: #007AFF; font-weight: 600; }
-        .invoice-meta .date { font-size: 11px; color: #86868b; margin-top: 3px; }
-        
-        
-        
         .text-right { text-align: right; }
         .text-center { text-align: center; }
         .totals-section {
@@ -115,12 +115,23 @@
             text-align: center;
             font-size: 9px;
             color: #86868b;
+            line-height: 1.7;
         }
         .footer .thank-you {
-            font-size: 12px;
+            font-size: 14px;
             font-weight: 600;
             color: #007AFF;
-            margin-bottom: 8px;
+            margin-bottom: 10px;
+        }
+        .footer .electronic-notice {
+            font-size: 9px;
+            color: #495057;
+            margin-bottom: 12px;
+            font-style: italic;
+        }
+        .footer .copyright {
+            margin-top: 8px;
+            font-size: 8px;
         }
     </style>
 </head>
@@ -128,13 +139,12 @@
     <div class="header">
         <div class="company-info">
             <h1>AROMEX</h1>
-            <div class="tagline">Premium Mobile Solutions</div>
+            <div class="contact-line">123 Business Avenue, Suite 100, City, State 12345</div>
+            <div class="contact-line">Email: info@aromex.com | Phone: (123) 456-7890</div>
         </div>
         <div class="invoice-meta">
             <h2>INVOICE</h2>
             <div class="invoice-type">Purchase Invoice</div>
-            <div class="invoice-number">{{order_number}}</div>
-            <div class="date">{{transaction_date}}</div>
         </div>
     </div>
     
@@ -172,9 +182,8 @@
     
     <div class="footer">
         <div class="thank-you">Thank you for your business!</div>
-        <div>AROMEX - Premium Mobile Solutions</div>
-        <div>Email: info@aromex.com | Phone: (123) 456-7890</div>
-        <div style="margin-top: 4px;">&copy; 2025 AROMEX. All rights reserved.</div>
+        <div class="electronic-notice">This is an electronically generated invoice and does not require a signature.</div>
+        <div class="copyright">&copy; 2025 AROMEX. All rights reserved.</div>
     </div>
 </body>
 </html>

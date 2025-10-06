@@ -23,18 +23,21 @@ struct BillScreen: View {
     @State private var pdfData: Data?
     @State private var errorMessage: String?
     @State private var purchase: Purchase?
-    @State private var scrollOffset: CGPoint = .zero
-    @State private var zoomScale: CGFloat = 1.0
+    @State private var currentPage: Int = 0
     
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     @Environment(\.verticalSizeClass) var verticalSizeClass
     
-    var isIPadHorizontal: Bool {
+    var isIPad: Bool {
         #if os(iOS)
         return horizontalSizeClass == .regular && verticalSizeClass == .regular
         #else
         return false
         #endif
+    }
+    
+    var totalPages: Int {
+        htmlPages.isEmpty ? 1 : htmlPages.count
     }
     
     init(purchaseId: String, onClose: (() -> Void)? = nil) {
@@ -44,107 +47,15 @@ struct BillScreen: View {
     
     var body: some View {
         ZStack {
-            Color.clear.ignoresSafeArea(.all)
+            Color(red: 0.95, green: 0.95, blue: 0.97)
+                .ignoresSafeArea(.all)
             
             if isLoading {
-                VStack(spacing: 20) {
-                    ProgressView()
-                        .scaleEffect(1.5)
-                    Text("Generating Bill...")
-                        .font(.headline)
-                        .foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                loadingView
             } else if let errorMessage = errorMessage {
-                VStack(spacing: 20) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 50))
-                        .foregroundColor(.red)
-                    Text("Error Loading Bill")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                    Text(errorMessage)
-                        .font(.body)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                    
-                    Button("Try Again") {
-                        loadBill()
-                    }
-                    .buttonStyle(.borderedProminent)
-                }
-                .padding()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                errorView(message: errorMessage)
             } else {
-                VStack(spacing: 0) {
-                    HStack {
-                        Text("Purchase Invoice")
-                            .font(.title2)
-                            .fontWeight(.bold)
-                        
-                        Spacer()
-                        
-                        Button("Done") {
-                            onClose?()
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                    .padding()
-                    .background(.regularMaterial)
-                    
-                    ZoomableScrollView(zoomScale: $zoomScale, scrollOffset: $scrollOffset) {
-                        BillWebView(htmlPages: htmlPages.isEmpty ? [htmlContent] : htmlPages) { pdfData in
-                            DispatchQueue.main.async {
-                                self.pdfData = pdfData
-                            }
-                        }
-                        .frame(width: 595, height: 842)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    
-                    HStack(spacing: 16) {
-                        Button(action: {
-                            onClose?()
-                        }) {
-                            HStack {
-                                Image(systemName: "arrow.left")
-                                Text("Back")
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(Color.gray.opacity(0.2))
-                            .cornerRadius(8)
-                        }
-                        .foregroundColor(.primary)
-                        
-                        Button(action: {
-                            if let pdfData = self.pdfData {
-                                #if os(iOS)
-                                self.showPDFShare = true
-                                #else
-                                self.sharePDFOnMacOS(pdfData: pdfData)
-                                #endif
-                            }
-                        }) {
-                            HStack {
-                                Image(systemName: "square.and.arrow.up")
-                                Text("Share PDF")
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(pdfData != nil ? Color.blue : Color.gray)
-                            .cornerRadius(8)
-                        }
-                        .foregroundColor(.white)
-                        .disabled(pdfData == nil)
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 16)
-                    .background(.regularMaterial)
-                    .shadow(color: .black.opacity(0.1), radius: 1, x: 0, y: -1)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                mainContentView
             }
         }
         .onAppear {
@@ -157,8 +68,371 @@ struct BillScreen: View {
             }
         }
         #endif
+        .background(
+            // Hidden PDF generator that only runs once
+            Group {
+                if !htmlPages.isEmpty && pdfData == nil {
+                    PDFGeneratorView(htmlPages: htmlPages) { generatedPDF in
+                        DispatchQueue.main.async {
+                            self.pdfData = generatedPDF
+                        }
+                    }
+                }
+            }
+        )
     }
     
+    // MARK: - Loading View
+    private var loadingView: some View {
+        VStack(spacing: 24) {
+            ProgressView()
+                .scaleEffect(1.5)
+                .progressViewStyle(CircularProgressViewStyle(tint: Color(red: 0.25, green: 0.33, blue: 0.54)))
+            
+            Text("Generating Invoice...")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundColor(.primary)
+            
+            Text("Please wait while we prepare your document")
+                .font(.system(size: 14, weight: .regular))
+                .foregroundColor(.secondary)
+        }
+        .padding(40)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(.background)
+                .shadow(color: .black.opacity(0.1), radius: 20, x: 0, y: 10)
+        )
+        .padding(.horizontal, 40)
+    }
+    
+    // MARK: - Error View
+    private func errorView(message: String) -> some View {
+        VStack(spacing: 24) {
+            ZStack {
+                Circle()
+                    .fill(Color.red.opacity(0.1))
+                    .frame(width: 80, height: 80)
+                
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 36))
+                    .foregroundColor(.red)
+            }
+            
+            Text("Unable to Load Invoice")
+                .font(.system(size: 22, weight: .bold))
+                .foregroundColor(.primary)
+            
+            Text(message)
+                .font(.system(size: 15, weight: .regular))
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 20)
+            
+            HStack(spacing: 12) {
+                Button(action: {
+                    onClose?()
+                }) {
+                    Text("Go Back")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.primary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color.secondary.opacity(0.3), lineWidth: 2)
+                        )
+                }
+                .buttonStyle(PlainButtonStyle())
+                
+                Button(action: {
+                    loadBill()
+                }) {
+                    Text("Try Again")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color(red: 0.25, green: 0.33, blue: 0.54))
+                        )
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+            .padding(.horizontal, 20)
+        }
+        .padding(40)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(.background)
+                .shadow(color: .black.opacity(0.1), radius: 20, x: 0, y: 10)
+        )
+        .padding(.horizontal, 40)
+    }
+    
+    // MARK: - Main Content View
+    private var mainContentView: some View {
+        VStack(spacing: 0) {
+            // Header
+            headerView
+            
+            // PDF Viewer
+            pdfViewerSection
+            
+            // Footer with Actions
+            footerView
+        }
+    }
+    
+    // MARK: - Header View
+    private var headerView: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 16) {
+                // Back button
+                Button(action: {
+                    onClose?()
+                }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 16, weight: .semibold))
+                        Text("Back")
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                    .foregroundColor(Color(red: 0.25, green: 0.33, blue: 0.54))
+                }
+                .buttonStyle(PlainButtonStyle())
+                
+                Spacer()
+                
+                // Title
+                VStack(spacing: 2) {
+                    Text("Purchase Invoice")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundColor(.primary)
+                    
+                    if let purchase = purchase {
+                        Text("Order #ORD-\(purchase.orderNumber)")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                Spacer()
+                
+                // Share button
+                Button(action: {
+                    if let pdfData = self.pdfData {
+                        #if os(iOS)
+                        self.showPDFShare = true
+                        #else
+                        self.sharePDFOnMacOS(pdfData: pdfData)
+                        #endif
+                    }
+                }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 16, weight: .semibold))
+                        Text("Share")
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(
+                                LinearGradient(
+                                    gradient: Gradient(colors: [
+                                        Color(red: 0.25, green: 0.33, blue: 0.54),
+                                        Color(red: 0.20, green: 0.28, blue: 0.48)
+                                    ]),
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                    )
+                    .shadow(color: Color(red: 0.25, green: 0.33, blue: 0.54).opacity(0.3), radius: 8, x: 0, y: 4)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .disabled(pdfData == nil)
+                .opacity(pdfData == nil ? 0.5 : 1.0)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            .background(.regularMaterial)
+            
+            Divider()
+        }
+    }
+    
+    // MARK: - PDF Viewer Section
+    private var pdfViewerSection: some View {
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                // Page navigation (if multiple pages)
+                if totalPages > 1 {
+                    pageNavigationView
+                        .padding(.vertical, 12)
+                        .background(.regularMaterial)
+                    
+                    Divider()
+                }
+                
+                // PDF content
+                ScrollView([.horizontal, .vertical], showsIndicators: true) {
+                    ZStack {
+                        // A4 aspect ratio container
+                        Rectangle()
+                            .fill(Color.white)
+                            .aspectRatio(210/297, contentMode: .fit)
+                            .frame(maxWidth: min(geometry.size.width - 40, 800))
+                            .shadow(color: .black.opacity(0.15), radius: 15, x: 0, y: 8)
+                        
+                        // WebView overlay - show only current page HTML
+                        SinglePageWebView(
+                            htmlContent: htmlPages.isEmpty ? htmlContent : htmlPages[currentPage]
+                        )
+                        .aspectRatio(210/297, contentMode: .fit)
+                        .frame(maxWidth: min(geometry.size.width - 40, 800))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(20)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+    
+    // MARK: - Page Navigation View
+    private var pageNavigationView: some View {
+        HStack(spacing: 20) {
+            // Previous button
+            Button(action: {
+                if currentPage > 0 {
+                    currentPage -= 1
+                }
+            }) {
+                HStack(spacing: 8) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("Previous")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .foregroundColor(currentPage > 0 ? Color(red: 0.25, green: 0.33, blue: 0.54) : .secondary)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(currentPage > 0 ? Color(red: 0.25, green: 0.33, blue: 0.54).opacity(0.1) : Color.secondary.opacity(0.1))
+                )
+            }
+            .buttonStyle(PlainButtonStyle())
+            .disabled(currentPage == 0)
+            
+            // Page indicator
+            Text("Page \(currentPage + 1) of \(totalPages)")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(.secondary)
+            
+            // Next button
+            Button(action: {
+                if currentPage < totalPages - 1 {
+                    currentPage += 1
+                }
+            }) {
+                HStack(spacing: 8) {
+                    Text("Next")
+                        .font(.system(size: 14, weight: .semibold))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .foregroundColor(currentPage < totalPages - 1 ? Color(red: 0.25, green: 0.33, blue: 0.54) : .secondary)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(currentPage < totalPages - 1 ? Color(red: 0.25, green: 0.33, blue: 0.54).opacity(0.1) : Color.secondary.opacity(0.1))
+                )
+            }
+            .buttonStyle(PlainButtonStyle())
+            .disabled(currentPage >= totalPages - 1)
+        }
+        .padding(.horizontal, 24)
+    }
+    
+    // MARK: - Footer View
+    private var footerView: some View {
+        VStack(spacing: 0) {
+            Divider()
+            
+            HStack(spacing: 16) {
+                // Close button
+                Button(action: {
+                    onClose?()
+                }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 16, weight: .semibold))
+                        Text("Close")
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                    .foregroundColor(.primary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.secondary.opacity(0.3), lineWidth: 2)
+                    )
+                }
+                .buttonStyle(PlainButtonStyle())
+                
+                // Download/Share button
+                Button(action: {
+                    if let pdfData = self.pdfData {
+                        #if os(iOS)
+                        self.showPDFShare = true
+                        #else
+                        self.sharePDFOnMacOS(pdfData: pdfData)
+                        #endif
+                    }
+                }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "arrow.down.doc.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                        Text("Download PDF")
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(
+                                LinearGradient(
+                                    gradient: Gradient(colors: [
+                                        Color(red: 0.25, green: 0.33, blue: 0.54),
+                                        Color(red: 0.20, green: 0.28, blue: 0.48)
+                                    ]),
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                    )
+                    .shadow(color: Color(red: 0.25, green: 0.33, blue: 0.54).opacity(0.3), radius: 8, x: 0, y: 4)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .disabled(pdfData == nil)
+                .opacity(pdfData == nil ? 0.5 : 1.0)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            .background(.regularMaterial)
+        }
+    }
+    
+    // MARK: - Load Bill Function
     private func loadBill() {
         loadBillWithRetry(maxRetries: 3)
     }
@@ -202,6 +476,7 @@ struct BillScreen: View {
                     self.purchase = purchase
                     self.htmlPages = htmlPages
                     self.htmlContent = htmlPages.first ?? ""
+                    self.currentPage = 0
                     self.isLoading = false
                 }
                 
@@ -221,173 +496,79 @@ struct BillScreen: View {
         }
     }
     
-#if os(macOS)
-private func sharePDFOnMacOS(pdfData: Data) {
-    let tempDirectory = FileManager.default.temporaryDirectory
-    let fileName = "Purchase_Invoice_\(self.purchase?.orderNumber ?? 0).pdf"
-    let tempURL = tempDirectory.appendingPathComponent(fileName)
-    
-    do {
-        try pdfData.write(to: tempURL)
-        
-        DispatchQueue.main.async {
-            let sharingService = NSSharingService(named: .sendViaAirDrop)
-            
-            if sharingService != nil {
-                NSWorkspace.shared.selectFile(tempURL.path, inFileViewerRootedAtPath: tempDirectory.path)
-            } else {
-                NSWorkspace.shared.activateFileViewerSelecting([tempURL])
-            }
-        }
-    } catch {
-        print("❌ Failed to save PDF: \(error)")
+    private func generateCompletePDF(htmlPages: [String]) async {
+        // This function is no longer needed
     }
-}
-#endif
+    
+    #if os(macOS)
+    private func sharePDFOnMacOS(pdfData: Data) {
+        let tempDirectory = FileManager.default.temporaryDirectory
+        let fileName = "Purchase_Invoice_\(self.purchase?.orderNumber ?? 0).pdf"
+        let tempURL = tempDirectory.appendingPathComponent(fileName)
+        
+        do {
+            try pdfData.write(to: tempURL)
+            
+            DispatchQueue.main.async {
+                let sharingService = NSSharingService(named: .sendViaAirDrop)
+                
+                if sharingService != nil {
+                    NSWorkspace.shared.selectFile(tempURL.path, inFileViewerRootedAtPath: tempDirectory.path)
+                } else {
+                    NSWorkspace.shared.activateFileViewerSelecting([tempURL])
+                }
+            }
+        } catch {
+            print("❌ Failed to save PDF: \(error)")
+        }
+    }
+    #endif
 }
 
-// MARK: - Zoomable ScrollView
-struct ZoomableScrollView<Content: View>: View {
-    @Binding var zoomScale: CGFloat
-    @Binding var scrollOffset: CGPoint
-    let content: Content
-    
-    init(zoomScale: Binding<CGFloat>, scrollOffset: Binding<CGPoint>, @ViewBuilder content: () -> Content) {
-        self._zoomScale = zoomScale
-        self._scrollOffset = scrollOffset
-        self.content = content()
-    }
+// MARK: - PDF Generator View (hidden, runs once)
+struct PDFGeneratorView: View {
+    let htmlPages: [String]
+    let onPDFGenerated: (Data?) -> Void
     
     var body: some View {
-        #if os(iOS)
-        ZoomableScrollViewRepresentable(zoomScale: $zoomScale, scrollOffset: $scrollOffset, content: content)
-        #else
-        ZoomableScrollViewRepresentable(zoomScale: $zoomScale, scrollOffset: $scrollOffset, content: content)
-        #endif
+        BillWebView(htmlPages: htmlPages, onPDFGenerated: onPDFGenerated)
+            .frame(width: 0, height: 0)
+            .opacity(0)
     }
 }
 
+// MARK: - SinglePageWebView (for display only)
 #if os(iOS)
-struct ZoomableScrollViewRepresentable<Content: View>: UIViewRepresentable {
-    @Binding var zoomScale: CGFloat
-    @Binding var scrollOffset: CGPoint
-    let content: Content
+struct SinglePageWebView: UIViewRepresentable {
+    let htmlContent: String
     
-    func makeUIView(context: Context) -> UIScrollView {
-        let scrollView = UIScrollView()
-        scrollView.delegate = context.coordinator
-        scrollView.maximumZoomScale = 3.0
-        scrollView.minimumZoomScale = 0.5
-        scrollView.bouncesZoom = true
-        scrollView.showsHorizontalScrollIndicator = true
-        scrollView.showsVerticalScrollIndicator = true
-        
-        let hostingController = UIHostingController(rootView: content)
-        hostingController.view.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.addSubview(hostingController.view)
-        
-        NSLayoutConstraint.activate([
-            hostingController.view.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
-            hostingController.view.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
-            hostingController.view.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
-            hostingController.view.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
-            hostingController.view.widthAnchor.constraint(equalToConstant: 595),
-            hostingController.view.heightAnchor.constraint(equalToConstant: 842)
-        ])
-        
-        context.coordinator.hostingController = hostingController
-        context.coordinator.scrollView = scrollView
-        
-        return scrollView
+    func makeUIView(context: Context) -> WKWebView {
+        let webView = WKWebView()
+        webView.backgroundColor = .white
+        webView.isUserInteractionEnabled = false
+        return webView
     }
     
-    func updateUIView(_ scrollView: UIScrollView, context: Context) {
-        scrollView.zoomScale = zoomScale
-        scrollView.contentOffset = scrollOffset
-    }
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
-    }
-    
-    class Coordinator: NSObject, UIScrollViewDelegate {
-        let parent: ZoomableScrollViewRepresentable
-        var hostingController: UIHostingController<Content>?
-        var scrollView: UIScrollView?
-        
-        init(_ parent: ZoomableScrollViewRepresentable) {
-            self.parent = parent
-        }
-        
-        func viewForZooming(in scrollView: UIScrollView) -> UIView? {
-            return hostingController?.view
-        }
-        
-        func scrollViewDidZoom(_ scrollView: UIScrollView) {
-            parent.zoomScale = scrollView.zoomScale
-        }
-        
-        func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            parent.scrollOffset = scrollView.contentOffset
-        }
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        webView.loadHTMLString(htmlContent, baseURL: nil)
     }
 }
 #else
-struct ZoomableScrollViewRepresentable<Content: View>: NSViewRepresentable {
-    @Binding var zoomScale: CGFloat
-    @Binding var scrollOffset: CGPoint
-    let content: Content
+struct SinglePageWebView: NSViewRepresentable {
+    let htmlContent: String
     
-    func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
-        scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = true
-        scrollView.autohidesScrollers = false
-        scrollView.allowsMagnification = true
-        scrollView.maxMagnification = 3.0
-        scrollView.minMagnification = 0.5
-        
-        let hostingView = NSHostingView(rootView: content)
-        hostingView.frame = CGRect(x: 0, y: 0, width: 595, height: 842)
-        
-        scrollView.documentView = hostingView
-        context.coordinator.scrollView = scrollView
-        
-        NotificationCenter.default.addObserver(
-            context.coordinator,
-            selector: #selector(Coordinator.magnificationChanged),
-            name: NSScrollView.didEndLiveMagnifyNotification,
-            object: scrollView
-        )
-        
-        return scrollView
+    func makeNSView(context: Context) -> WKWebView {
+        let webView = WKWebView()
+        return webView
     }
     
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        scrollView.magnification = zoomScale
-    }
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
-    }
-    
-    class Coordinator: NSObject {
-        let parent: ZoomableScrollViewRepresentable
-        var scrollView: NSScrollView?
-        
-        init(_ parent: ZoomableScrollViewRepresentable) {
-            self.parent = parent
-        }
-        
-        @objc func magnificationChanged() {
-            if let scrollView = scrollView {
-                parent.zoomScale = scrollView.magnification
-            }
-        }
+    func updateNSView(_ webView: WKWebView, context: Context) {
+        webView.loadHTMLString(htmlContent, baseURL: nil)
     }
 }
 #endif
 
+// MARK: - BillWebView (for PDF generation only)
 #if os(iOS)
 struct BillWebView: UIViewRepresentable {
     let htmlPages: [String]
@@ -396,6 +577,7 @@ struct BillWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let webView = WKWebView()
         webView.navigationDelegate = context.coordinator
+        webView.backgroundColor = .white
         return webView
     }
     
@@ -472,7 +654,6 @@ struct BillWebView: UIViewRepresentable {
         }
     }
 }
-
 #else
 struct BillWebView: NSViewRepresentable {
     let htmlPages: [String]
@@ -526,123 +707,124 @@ struct BillWebView: NSViewRepresentable {
                             webView.loadHTMLString(self.parent.htmlPages[self.currentPageIndex], baseURL: nil)
                         }
                     } else {
-                                            self.mergePDFs()
-                                        }
-                                        
-                                    case .failure(let error):
-                                        print("PDF generation failed: \(error)")
-                                        DispatchQueue.main.async {
-                                            self.parent.onPDFGenerated(nil)
-                                        }
-                                    }
-                                }
-                            }
-                            
-                            private func mergePDFs() {
-                                let mergedPDF = PDFDocument()
-                                
-                                for pdfData in pdfPages {
-                                    if let pdfDoc = PDFDocument(data: pdfData) {
-                                        for pageIndex in 0..<pdfDoc.pageCount {
-                                            if let page = pdfDoc.page(at: pageIndex) {
-                                                mergedPDF.insert(page, at: mergedPDF.pageCount)
-                                            }
-                                        }
-                                    }
-                                }
-                                
-                                DispatchQueue.main.async {
-                                    self.parent.onPDFGenerated(mergedPDF.dataRepresentation())
-                                }
-                            }
+                        self.mergePDFs()
+                    }
+                    
+                case .failure(let error):
+                    print("PDF generation failed: \(error)")
+                    DispatchQueue.main.async {
+                        self.parent.onPDFGenerated(nil)
+                    }
+                }
+            }
+        }
+        
+        private func mergePDFs() {
+            let mergedPDF = PDFDocument()
+            
+            for pdfData in pdfPages {
+                if let pdfDoc = PDFDocument(data: pdfData) {
+                    for pageIndex in 0..<pdfDoc.pageCount {
+                        if let page = pdfDoc.page(at: pageIndex) {
+                            mergedPDF.insert(page, at: mergedPDF.pageCount)
                         }
                     }
-                    #endif
+                }
+            }
+            
+            DispatchQueue.main.async {
+                self.parent.onPDFGenerated(mergedPDF.dataRepresentation())
+            }
+        }
+    }
+}
+#endif
 
-                    #if os(iOS)
-                    struct PDFShareView: UIViewControllerRepresentable {
-                        let pdfData: Data
-                        
-                        func makeUIViewController(context: Context) -> UIActivityViewController {
-                            let activityVC = UIActivityViewController(activityItems: [pdfData], applicationActivities: nil)
-                            return activityVC
-                        }
-                        
-                        func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
-                    }
-                    #endif
+// MARK: - PDF Share View
+#if os(iOS)
+struct PDFShareView: UIViewControllerRepresentable {
+    let pdfData: Data
+    
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        let activityVC = UIActivityViewController(activityItems: [pdfData], applicationActivities: nil)
+        return activityVC
+    }
+    
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+#endif
 
-                    // MARK: - Purchase Model
-                    struct Purchase {
-                        let id: String
-                        let transactionDate: Date
-                        let orderNumber: Int
-                        let subtotal: Double
-                        let gstPercentage: Double
-                        let gstAmount: Double
-                        let pstPercentage: Double
-                        let pstAmount: Double
-                        let adjustmentAmount: Double
-                        let adjustmentUnit: String
-                        let grandTotal: Double
-                        let notes: String
-                        let purchasedPhones: [[String: Any]]
-                        let paymentMethods: [String: Any]
-                        let supplierName: String?
-                        let supplierAddress: String?
-                        let middlemanName: String?
-                        let middlemanPayment: [String: Any]?
-                        
-                        static func fromFirestore(data: [String: Any], id: String) throws -> Purchase {
-                            guard let transactionDate = (data["transactionDate"] as? Timestamp)?.dateValue(),
-                                  let orderNumber = data["orderNumber"] as? Int,
-                                  let subtotal = data["subtotal"] as? Double,
-                                  let gstPercentage = data["gstPercentage"] as? Double,
-                                  let gstAmount = data["gstAmount"] as? Double,
-                                  let pstPercentage = data["pstPercentage"] as? Double,
-                                  let pstAmount = data["pstAmount"] as? Double,
-                                  let adjustmentAmount = data["adjustmentAmount"] as? Double,
-                                  let adjustmentUnit = data["adjustmentUnit"] as? String,
-                                  let grandTotal = data["grandTotal"] as? Double,
-                                  let notes = data["notes"] as? String,
-                                  let purchasedPhones = data["purchasedPhones"] as? [[String: Any]],
-                                  let paymentMethods = data["paymentMethods"] as? [String: Any] else {
-                                throw PurchaseError.invalidData
-                            }
-                            
-                            let supplierName = data["supplierName"] as? String
-                            let supplierAddress = data["supplierAddress"] as? String
-                            let middlemanName = data["middlemanName"] as? String
-                            let middlemanPayment = data["middlemanPayment"] as? [String: Any]
-                            
-                            return Purchase(
-                                id: id,
-                                transactionDate: transactionDate,
-                                orderNumber: orderNumber,
-                                subtotal: subtotal,
-                                gstPercentage: gstPercentage,
-                                gstAmount: gstAmount,
-                                pstPercentage: pstPercentage,
-                                pstAmount: pstAmount,
-                                adjustmentAmount: adjustmentAmount,
-                                adjustmentUnit: adjustmentUnit,
-                                grandTotal: grandTotal,
-                                notes: notes,
-                                purchasedPhones: purchasedPhones,
-                                paymentMethods: paymentMethods,
-                                supplierName: supplierName,
-                                supplierAddress: supplierAddress,
-                                middlemanName: middlemanName,
-                                middlemanPayment: middlemanPayment
-                            )
-                        }
-                    }
+// MARK: - Purchase Model
+struct Purchase {
+    let id: String
+    let transactionDate: Date
+    let orderNumber: Int
+    let subtotal: Double
+    let gstPercentage: Double
+    let gstAmount: Double
+    let pstPercentage: Double
+    let pstAmount: Double
+    let adjustmentAmount: Double
+    let adjustmentUnit: String
+    let grandTotal: Double
+    let notes: String
+    let purchasedPhones: [[String: Any]]
+    let paymentMethods: [String: Any]
+    let supplierName: String?
+    let supplierAddress: String?
+    let middlemanName: String?
+    let middlemanPayment: [String: Any]?
+    
+    static func fromFirestore(data: [String: Any], id: String) throws -> Purchase {
+        guard let transactionDate = (data["transactionDate"] as? Timestamp)?.dateValue(),
+              let orderNumber = data["orderNumber"] as? Int,
+              let subtotal = data["subtotal"] as? Double,
+              let gstPercentage = data["gstPercentage"] as? Double,
+              let gstAmount = data["gstAmount"] as? Double,
+              let pstPercentage = data["pstPercentage"] as? Double,
+              let pstAmount = data["pstAmount"] as? Double,
+              let adjustmentAmount = data["adjustmentAmount"] as? Double,
+              let adjustmentUnit = data["adjustmentUnit"] as? String,
+              let grandTotal = data["grandTotal"] as? Double,
+              let notes = data["notes"] as? String,
+              let purchasedPhones = data["purchasedPhones"] as? [[String: Any]],
+              let paymentMethods = data["paymentMethods"] as? [String: Any] else {
+            throw PurchaseError.invalidData
+        }
+        
+        let supplierName = data["supplierName"] as? String
+        let supplierAddress = data["supplierAddress"] as? String
+        let middlemanName = data["middlemanName"] as? String
+        let middlemanPayment = data["middlemanPayment"] as? [String: Any]
+        
+        return Purchase(
+            id: id,
+            transactionDate: transactionDate,
+            orderNumber: orderNumber,
+            subtotal: subtotal,
+            gstPercentage: gstPercentage,
+            gstAmount: gstAmount,
+            pstPercentage: pstPercentage,
+            pstAmount: pstAmount,
+            adjustmentAmount: adjustmentAmount,
+            adjustmentUnit: adjustmentUnit,
+            grandTotal: grandTotal,
+            notes: notes,
+            purchasedPhones: purchasedPhones,
+            paymentMethods: paymentMethods,
+            supplierName: supplierName,
+            supplierAddress: supplierAddress,
+            middlemanName: middlemanName,
+            middlemanPayment: middlemanPayment
+        )
+    }
+}
 
-                    enum PurchaseError: Error {
-                        case invalidData
-                        case firestoreError(String)
-                    }
+enum PurchaseError: Error {
+    case invalidData
+    case firestoreError(String)
+}
 
-                    #Preview {
-                        BillScreen(purchaseId: "sample-purchase-id")
-                    }
+#Preview {
+    BillScreen(purchaseId: "sample-purchase-id")
+}

@@ -23,12 +23,15 @@
             border-bottom: 2px solid #007AFF;
         }
         .company-info h1 { font-size: 26px; font-weight: 700; color: #007AFF; margin-bottom: 4px; }
-        .company-info .tagline { font-size: 11px; color: #86868b; }
+        .company-info .contact-line {
+            font-size: 9px;
+            color: #86868b;
+            line-height: 1.6;
+            margin-top: 6px;
+        }
         .invoice-meta { text-align: right; }
         .invoice-meta h2 { font-size: 20px; font-weight: 600; color: #1d1d1f; margin-bottom: 4px; }
         .invoice-meta .invoice-type { font-size: 10px; color: #86868b; margin-bottom: 6px; }
-        .invoice-meta .invoice-number { font-size: 14px; color: #007AFF; font-weight: 600; }
-        .invoice-meta .date { font-size: 11px; color: #86868b; margin-top: 3px; }
         .client-section {
             display: flex;
             gap: 20px;
@@ -37,7 +40,7 @@
             background: #f5f5f7;
             border-radius: 10px;
         }
-        .bill-to, .ship-to { flex: 1; }
+        .bill-to, .order-info { flex: 1; }
         .section-title {
             font-size: 12px;
             font-weight: 600;
@@ -48,6 +51,14 @@
         }
         .client-info { font-size: 10px; line-height: 1.5; }
         .client-info .name { font-weight: 600; margin-bottom: 3px; }
+        .order-info-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 6px;
+            font-size: 10px;
+        }
+        .order-info-item .label { color: #86868b; font-weight: 500; }
+        .order-info-item .value { color: #1d1d1f; font-weight: 600; }
         .items-table {
             width: 100%;
             border-collapse: collapse;
@@ -85,13 +96,12 @@
     <div class="header">
         <div class="company-info">
             <h1>AROMEX</h1>
-            <div class="tagline">Premium Mobile Solutions</div>
+            <div class="contact-line">123 Business Avenue, Suite 100, City, State 12345</div>
+            <div class="contact-line">Email: info@aromex.com | Phone: (123) 456-7890</div>
         </div>
         <div class="invoice-meta">
             <h2>INVOICE</h2>
             <div class="invoice-type">Purchase Invoice</div>
-            <div class="invoice-number">{{order_number}}</div>
-            <div class="date">{{transaction_date}}</div>
         </div>
     </div>
     
@@ -103,11 +113,15 @@
                 <div>{{supplier_entity_type}}</div>
             </div>
         </div>
-        <div class="ship-to">
-            <div class="section-title">Ship To</div>
-            <div class="client-info">
-                <div class="name">{{supplier_name}}</div>
-                <div>{{supplier_entity_type}}</div>
+        <div class="order-info">
+            <div class="section-title">Order Details</div>
+            <div class="order-info-item">
+                <span class="label">Order Number:</span>
+                <span class="value">{{order_number}}</span>
+            </div>
+            <div class="order-info-item">
+                <span class="label">Date:</span>
+                <span class="value">{{transaction_date}}</span>
             </div>
         </div>
     </div>

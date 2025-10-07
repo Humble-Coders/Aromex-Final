@@ -24,6 +24,12 @@ struct BillScreen: View {
     @State private var errorMessage: String?
     @State private var purchase: Purchase?
     @State private var currentPage: Int = 0
+    // Edit contact info state
+    @State private var showingEditContact = false
+    @State private var editAddress: String = ""
+    @State private var editEmail: String = ""
+    @State private var editPhone: String = ""
+    @State private var isPermanentEdit: Bool = false
     
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     @Environment(\.verticalSizeClass) var verticalSizeClass
@@ -48,14 +54,14 @@ struct BillScreen: View {
     var body: some View {
         ZStack {
             Color(red: 0.95, green: 0.95, blue: 0.97)
-                .ignoresSafeArea(.all)
+                .ignoresSafeArea(.container, edges: [])
             
             if isLoading {
                 loadingView
             } else if let errorMessage = errorMessage {
                 errorView(message: errorMessage)
             } else {
-                mainContentView
+                contentView
             }
         }
         .onAppear {
@@ -67,9 +73,125 @@ struct BillScreen: View {
                 PDFShareView(pdfData: pdfData)
             }
         }
+        // Hide title on iPhone; only back and share buttons should show
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            // Edit button (left of Share)
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: {
+                    if let purchase = self.purchase {
+                        editAddress = purchase.companyAddress ?? ""
+                        editEmail = purchase.companyEmail ?? ""
+                        editPhone = purchase.companyPhone ?? ""
+                    }
+                    isPermanentEdit = false
+                    showingEditContact = true
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "pencil")
+                        Text("Edit")
+                    }
+                }
+            }
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button(action: {
+                    onClose?()
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                        Text("Back")
+                    }
+                }
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: {
+                    if let pdfData = self.pdfData {
+                        self.showPDFShare = true
+                    }
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "square.and.arrow.up")
+                        Text("Share")
+                    }
+                }
+                .disabled(pdfData == nil)
+                .opacity(pdfData == nil ? 0.5 : 1.0)
+            }
+        }
+        .sheet(isPresented: $showingEditContact) {
+            EditContactSheet(
+                address: $editAddress,
+                email: $editEmail,
+                phone: $editPhone,
+                isPermanent: $isPermanentEdit,
+                onCancel: { showingEditContact = false },
+                onSave: { address, email, phone, isPermanent in
+                    Task {
+                        await self.applyContactEdits(address: address, email: email, phone: phone, isPermanent: isPermanent)
+                    }
+                }
+            )
+        }
+        #else
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button(action: {
+                    onClose?()
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                        Text("Back")
+                    }
+                }
+            }
+            // Edit button just left of Share (both in trailing area)
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: {
+                    if let purchase = self.purchase {
+                        editAddress = purchase.companyAddress ?? ""
+                        editEmail = purchase.companyEmail ?? ""
+                        editPhone = purchase.companyPhone ?? ""
+                    }
+                    isPermanentEdit = false
+                    showingEditContact = true
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "pencil")
+                        Text("Edit")
+                    }
+                }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: {
+                    if let pdfData = self.pdfData {
+                        self.sharePDFOnMacOS(pdfData: pdfData)
+                    }
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "square.and.arrow.up")
+                        Text("Share")
+                    }
+                }
+                .disabled(pdfData == nil)
+                .opacity(pdfData == nil ? 0.5 : 1.0)
+            }
+        }
+        .sheet(isPresented: $showingEditContact) {
+            EditContactSheet(
+                address: $editAddress,
+                email: $editEmail,
+                phone: $editPhone,
+                isPermanent: $isPermanentEdit,
+                onCancel: { showingEditContact = false },
+                onSave: { address, email, phone, isPermanent in
+                    Task {
+                        await self.applyContactEdits(address: address, email: email, phone: phone, isPermanent: isPermanent)
+                    }
+                }
+            )
+        }
         #endif
         .background(
-            // Hidden PDF generator that only runs once
             Group {
                 if !htmlPages.isEmpty && pdfData == nil {
                     PDFGeneratorView(htmlPages: htmlPages) { generatedPDF in
@@ -171,266 +293,87 @@ struct BillScreen: View {
         .padding(.horizontal, 40)
     }
     
-    // MARK: - Main Content View
-    private var mainContentView: some View {
-        VStack(spacing: 0) {
-            // Header
-            headerView
-            
-            // PDF Viewer
-            pdfViewerSection
-            
-            // Footer with Actions
-            footerView
-        }
-    }
-    
-    // MARK: - Header View
-    private var headerView: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 16) {
-                // Back button
-                Button(action: {
-                    onClose?()
-                }) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 16, weight: .semibold))
-                        Text("Back")
-                            .font(.system(size: 16, weight: .semibold))
-                    }
-                    .foregroundColor(Color(red: 0.25, green: 0.33, blue: 0.54))
-                }
-                .buttonStyle(PlainButtonStyle())
-                
-                Spacer()
-                
-                // Title
-                VStack(spacing: 2) {
-                    Text("Purchase Invoice")
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundColor(.primary)
-                    
-                    if let purchase = purchase {
-                        Text("Order #ORD-\(purchase.orderNumber)")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(.secondary)
-                    }
-                }
-                
-                Spacer()
-                
-                // Share button
-                Button(action: {
-                    if let pdfData = self.pdfData {
-                        #if os(iOS)
-                        self.showPDFShare = true
-                        #else
-                        self.sharePDFOnMacOS(pdfData: pdfData)
-                        #endif
-                    }
-                }) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "square.and.arrow.up")
-                            .font(.system(size: 16, weight: .semibold))
-                        Text("Share")
-                            .font(.system(size: 16, weight: .semibold))
-                    }
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(
-                                LinearGradient(
-                                    gradient: Gradient(colors: [
-                                        Color(red: 0.25, green: 0.33, blue: 0.54),
-                                        Color(red: 0.20, green: 0.28, blue: 0.48)
-                                    ]),
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                            )
-                    )
-                    .shadow(color: Color(red: 0.25, green: 0.33, blue: 0.54).opacity(0.3), radius: 8, x: 0, y: 4)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .disabled(pdfData == nil)
-                .opacity(pdfData == nil ? 0.5 : 1.0)
+    // MARK: - Main Content View (Native bars only)
+    private var contentView: some View {
+        Group {
+            if let pdfData = pdfData, let document = PDFDocument(data: pdfData) {
+                PDFViewRepresentable(document: document)
+            } else {
+                pagedHTMLViewer
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 20)
-            .background(.regularMaterial)
-            
-            Divider()
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.white)
     }
     
-    // MARK: - PDF Viewer Section
-    private var pdfViewerSection: some View {
+    // Removed custom header to respect native top bars
+    
+    // MARK: - HTML Viewer (paged, interactive)
+    private var pagedHTMLViewer: some View {
         GeometryReader { geometry in
+            #if os(iOS)
+            TabView(selection: $currentPage) {
+                ForEach(Array((htmlPages.isEmpty ? [htmlContent] : htmlPages).enumerated()), id: \.offset) { index, pageHTML in
+                    InteractiveWebView(htmlContent: pageHTML)
+                        .tag(index)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .background(Color.white)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .automatic))
+            #else
+            // macOS fallback - use ScrollView with manual page navigation
             VStack(spacing: 0) {
-                // Page navigation (if multiple pages)
+                // Page indicator
                 if totalPages > 1 {
-                    pageNavigationView
-                        .padding(.vertical, 12)
-                        .background(.regularMaterial)
-                    
-                    Divider()
-                }
-                
-                // PDF content
-                ScrollView([.horizontal, .vertical], showsIndicators: true) {
-                    ZStack {
-                        // A4 aspect ratio container
-                        Rectangle()
-                            .fill(Color.white)
-                            .aspectRatio(210/297, contentMode: .fit)
-                            .frame(maxWidth: min(geometry.size.width - 40, 800))
-                            .shadow(color: .black.opacity(0.15), radius: 15, x: 0, y: 8)
+                    HStack {
+                        Button(action: {
+                            if currentPage > 0 {
+                                currentPage -= 1
+                            }
+                        }) {
+                            Image(systemName: "chevron.left")
+                                .foregroundColor(currentPage > 0 ? .primary : .secondary)
+                        }
+                        .disabled(currentPage == 0)
                         
-                        // WebView overlay - show only current page HTML
-                        SinglePageWebView(
-                            htmlContent: htmlPages.isEmpty ? htmlContent : htmlPages[currentPage]
-                        )
-                        .aspectRatio(210/297, contentMode: .fit)
-                        .frame(maxWidth: min(geometry.size.width - 40, 800))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        Spacer()
+                        
+                        Text("Page \(currentPage + 1) of \(totalPages)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        Spacer()
+                        
+                        Button(action: {
+                            if currentPage < totalPages - 1 {
+                                currentPage += 1
+                            }
+                        }) {
+                            Image(systemName: "chevron.right")
+                                .foregroundColor(currentPage < totalPages - 1 ? .primary : .secondary)
+                        }
+                        .disabled(currentPage >= totalPages - 1)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(20)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 8)
+                    .background(.regularMaterial)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-    }
-    
-    // MARK: - Page Navigation View
-    private var pageNavigationView: some View {
-        HStack(spacing: 20) {
-            // Previous button
-            Button(action: {
-                if currentPage > 0 {
-                    currentPage -= 1
-                }
-            }) {
-                HStack(spacing: 8) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 14, weight: .semibold))
-                    Text("Previous")
-                        .font(.system(size: 14, weight: .semibold))
-                }
-                .foregroundColor(currentPage > 0 ? Color(red: 0.25, green: 0.33, blue: 0.54) : .secondary)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(currentPage > 0 ? Color(red: 0.25, green: 0.33, blue: 0.54).opacity(0.1) : Color.secondary.opacity(0.1))
-                )
-            }
-            .buttonStyle(PlainButtonStyle())
-            .disabled(currentPage == 0)
-            
-            // Page indicator
-            Text("Page \(currentPage + 1) of \(totalPages)")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundColor(.secondary)
-            
-            // Next button
-            Button(action: {
-                if currentPage < totalPages - 1 {
-                    currentPage += 1
-                }
-            }) {
-                HStack(spacing: 8) {
-                    Text("Next")
-                        .font(.system(size: 14, weight: .semibold))
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 14, weight: .semibold))
-                }
-                .foregroundColor(currentPage < totalPages - 1 ? Color(red: 0.25, green: 0.33, blue: 0.54) : .secondary)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(currentPage < totalPages - 1 ? Color(red: 0.25, green: 0.33, blue: 0.54).opacity(0.1) : Color.secondary.opacity(0.1))
-                )
-            }
-            .buttonStyle(PlainButtonStyle())
-            .disabled(currentPage >= totalPages - 1)
-        }
-        .padding(.horizontal, 24)
-    }
-    
-    // MARK: - Footer View
-    private var footerView: some View {
-        VStack(spacing: 0) {
-            Divider()
-            
-            HStack(spacing: 16) {
-                // Close button
-                Button(action: {
-                    onClose?()
-                }) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 16, weight: .semibold))
-                        Text("Close")
-                            .font(.system(size: 16, weight: .semibold))
-                    }
-                    .foregroundColor(.primary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.secondary.opacity(0.3), lineWidth: 2)
-                    )
-                }
-                .buttonStyle(PlainButtonStyle())
                 
-                // Download/Share button
-                Button(action: {
-                    if let pdfData = self.pdfData {
-                        #if os(iOS)
-                        self.showPDFShare = true
-                        #else
-                        self.sharePDFOnMacOS(pdfData: pdfData)
-                        #endif
-                    }
-                }) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "arrow.down.doc.fill")
-                            .font(.system(size: 16, weight: .semibold))
-                        Text("Download PDF")
-                            .font(.system(size: 16, weight: .semibold))
-                    }
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(
-                                LinearGradient(
-                                    gradient: Gradient(colors: [
-                                        Color(red: 0.25, green: 0.33, blue: 0.54),
-                                        Color(red: 0.20, green: 0.28, blue: 0.48)
-                                    ]),
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                            )
-                    )
-                    .shadow(color: Color(red: 0.25, green: 0.33, blue: 0.54).opacity(0.3), radius: 8, x: 0, y: 4)
+                // Content
+                ScrollView([.horizontal, .vertical], showsIndicators: true) {
+                    InteractiveWebView(htmlContent: htmlPages.isEmpty ? htmlContent : htmlPages[currentPage])
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .background(Color.white)
                 }
-                .buttonStyle(PlainButtonStyle())
-                .disabled(pdfData == nil)
-                .opacity(pdfData == nil ? 0.5 : 1.0)
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 20)
-            .background(.regularMaterial)
+            #endif
         }
     }
+    
+    // Removed custom page navigation; paging is handled by native PageTabViewStyle
+    
+    // Removed custom footer to respect native bars
     
     // MARK: - Load Bill Function
     private func loadBill() {
@@ -467,7 +410,78 @@ struct BillScreen: View {
                     return
                 }
                 
-                let purchase = try Purchase.fromFirestore(data: data, id: purchaseId)
+                var purchase = try Purchase.fromFirestore(data: data, id: purchaseId)
+                
+                // Fetch supplier name/phone from reference
+                if let supplierRef = data["supplier"] as? DocumentReference {
+                    let supplierSnap = try await supplierRef.getDocument()
+                    if supplierSnap.exists {
+                        let sData = supplierSnap.data() ?? [:]
+                        let sName = sData["name"] as? String
+                        let sPhone = sData["phone"] as? String
+                        purchase = Purchase(
+                            id: purchase.id,
+                            transactionDate: purchase.transactionDate,
+                            orderNumber: purchase.orderNumber,
+                            subtotal: purchase.subtotal,
+                            gstPercentage: purchase.gstPercentage,
+                            gstAmount: purchase.gstAmount,
+                            pstPercentage: purchase.pstPercentage,
+                            pstAmount: purchase.pstAmount,
+                            adjustmentAmount: purchase.adjustmentAmount,
+                            adjustmentUnit: purchase.adjustmentUnit,
+                            grandTotal: purchase.grandTotal,
+                            notes: purchase.notes,
+                            purchasedPhones: purchase.purchasedPhones,
+                            paymentMethods: purchase.paymentMethods,
+                            supplierName: sName ?? purchase.supplierName,
+                            supplierAddress: purchase.supplierAddress,
+                            middlemanName: purchase.middlemanName,
+                            middlemanPayment: purchase.middlemanPayment,
+                            supplierPhone: sPhone,
+                            companyAddress: purchase.companyAddress,
+                            companyEmail: purchase.companyEmail,
+                            companyPhone: purchase.companyPhone
+                        )
+                    }
+                }
+                
+                // Fetch company contact info from Data collection
+                do {
+                    async let addressDoc = db.collection("Data").document("address").getDocument()
+                    async let emailDoc = db.collection("Data").document("email").getDocument()
+                    async let phoneDoc = db.collection("Data").document("phone").getDocument()
+                    let (addrSnap, emailSnap, phoneSnap) = try await (addressDoc, emailDoc, phoneDoc)
+                    let addr = (addrSnap.data()?["address"] as? String)
+                    let email = (emailSnap.data()?["email"] as? String)
+                    let phone = (phoneSnap.data()?["phone"] as? String)
+                    purchase = Purchase(
+                        id: purchase.id,
+                        transactionDate: purchase.transactionDate,
+                        orderNumber: purchase.orderNumber,
+                        subtotal: purchase.subtotal,
+                        gstPercentage: purchase.gstPercentage,
+                        gstAmount: purchase.gstAmount,
+                        pstPercentage: purchase.pstPercentage,
+                        pstAmount: purchase.pstAmount,
+                        adjustmentAmount: purchase.adjustmentAmount,
+                        adjustmentUnit: purchase.adjustmentUnit,
+                        grandTotal: purchase.grandTotal,
+                        notes: purchase.notes,
+                        purchasedPhones: purchase.purchasedPhones,
+                        paymentMethods: purchase.paymentMethods,
+                        supplierName: purchase.supplierName,
+                        supplierAddress: purchase.supplierAddress,
+                        middlemanName: purchase.middlemanName,
+                        middlemanPayment: purchase.middlemanPayment,
+                        supplierPhone: purchase.supplierPhone,
+                        companyAddress: addr ?? purchase.companyAddress,
+                        companyEmail: email ?? purchase.companyEmail,
+                        companyPhone: phone ?? purchase.companyPhone
+                    )
+                } catch {
+                    // If Data collection docs are missing, proceed with nils
+                }
                 
                 let billGenerator = BillGenerator()
                 let htmlPages = try billGenerator.generateBillHTML(for: purchase)
@@ -555,6 +569,243 @@ struct SinglePageWebView: UIViewRepresentable {
 }
 #else
 struct SinglePageWebView: NSViewRepresentable {
+    let htmlContent: String
+    
+    func makeNSView(context: Context) -> WKWebView {
+        let webView = WKWebView()
+        return webView
+    }
+    
+    func updateNSView(_ webView: WKWebView, context: Context) {
+        webView.loadHTMLString(htmlContent, baseURL: nil)
+    }
+}
+#endif
+
+// MARK: - Edit Contact Sheet
+struct EditContactSheet: View {
+    @Binding var address: String
+    @Binding var email: String
+    @Binding var phone: String
+    @Binding var isPermanent: Bool
+    let onCancel: () -> Void
+    let onSave: (String, String, String, Bool) -> Void
+    
+    var body: some View {
+        #if os(iOS)
+        content
+            .presentationDetents([.large])
+            .presentationDragIndicator(.hidden)
+        #else
+        content
+            .frame(width: 420)
+        #endif
+    }
+    
+    private var content: some View {
+        let primary = Color(red: 0.25, green: 0.33, blue: 0.54)
+        #if os(iOS)
+        let fieldBG = Color(UIColor.secondarySystemBackground)
+        let cardBG = Color(UIColor.systemBackground)
+        #else
+        let fieldBG = Color(NSColor.windowBackgroundColor)
+        let cardBG = Color(NSColor.windowBackgroundColor)
+        #endif
+        
+        return VStack(spacing: 18) {
+            HStack(spacing: 10) {
+                Image(systemName: "pencil.circle.fill")
+                    .font(.system(size: 22))
+                    .foregroundColor(primary)
+                Text("Edit Bill Contact Info")
+                    .font(.system(size: 18, weight: .semibold))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            
+            VStack(spacing: 12) {
+                // Address Field (multiline)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Address")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.secondary)
+                    HStack(spacing: 10) {
+                        Image(systemName: "mappin.and.ellipse")
+                            .foregroundColor(primary)
+                        TextField("Company address", text: $address, axis: .vertical)
+                            .lineLimit(3, reservesSpace: true)
+                    }
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(fieldBG))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                    )
+                }
+                
+                // Email Field
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Email")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.secondary)
+                    HStack(spacing: 10) {
+                        Image(systemName: "envelope.fill")
+                            .foregroundColor(primary)
+                        #if os(iOS)
+                        TextField("Company email", text: $email)
+                            .keyboardType(.emailAddress)
+                        #else
+                        TextField("Company email", text: $email)
+                        #endif
+                    }
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(fieldBG))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                    )
+                }
+                
+                // Phone Field
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Phone")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.secondary)
+                    HStack(spacing: 10) {
+                        Image(systemName: "phone.fill")
+                            .foregroundColor(primary)
+                        #if os(iOS)
+                        TextField("Company phone", text: $phone)
+                            .keyboardType(.phonePad)
+                        #else
+                        TextField("Company phone", text: $phone)
+                        #endif
+                    }
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(fieldBG))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                    )
+                }
+                
+                Toggle("Save permanently", isOn: $isPermanent)
+                    .tint(primary)
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(cardBG)
+                    .shadow(color: .black.opacity(0.06), radius: 12, x: 0, y: 6)
+            )
+            
+            HStack(spacing: 12) {
+                Button(action: onCancel) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "xmark")
+                        Text("Cancel")
+                    }
+                    .foregroundColor(.primary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(PlainButtonStyle())
+                
+                Button(action: { onSave(address, email, phone, isPermanent) }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill")
+                        Text("Save")
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(
+                        LinearGradient(
+                            gradient: Gradient(colors: [
+                                Color(red: 0.25, green: 0.33, blue: 0.54),
+                                Color(red: 0.20, green: 0.28, blue: 0.48)
+                            ]),
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    )
+                    .shadow(color: Color(red: 0.25, green: 0.33, blue: 0.54).opacity(0.25), radius: 8, x: 0, y: 4)
+                    .contentShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+        }
+        .padding(20)
+    }
+}
+
+// MARK: - PDFViewRepresentable (for PDF display)
+#if os(iOS)
+struct PDFViewRepresentable: UIViewRepresentable {
+    let document: PDFDocument
+    
+    func makeUIView(context: Context) -> PDFView {
+        let pdfView = PDFView()
+        pdfView.document = document
+        pdfView.autoScales = true
+        pdfView.displayMode = .singlePageContinuous
+        pdfView.displayDirection = .vertical
+        pdfView.backgroundColor = .white
+        return pdfView
+    }
+    
+    func updateUIView(_ pdfView: PDFView, context: Context) {
+        pdfView.document = document
+    }
+}
+#else
+struct PDFViewRepresentable: NSViewRepresentable {
+    let document: PDFDocument
+    
+    func makeNSView(context: Context) -> PDFView {
+        let pdfView = PDFView()
+        pdfView.document = document
+        pdfView.autoScales = true
+        pdfView.displayMode = .singlePageContinuous
+        pdfView.displayDirection = .vertical
+        pdfView.backgroundColor = .white
+        return pdfView
+    }
+    
+    func updateNSView(_ pdfView: PDFView, context: Context) {
+        pdfView.document = document
+    }
+}
+#endif
+
+// MARK: - InteractiveWebView (zoomable/scrollable)
+#if os(iOS)
+struct InteractiveWebView: UIViewRepresentable {
+    let htmlContent: String
+    
+    func makeUIView(context: Context) -> WKWebView {
+        let webView = WKWebView()
+        webView.allowsBackForwardNavigationGestures = false
+        webView.scrollView.minimumZoomScale = 1.0
+        webView.scrollView.maximumZoomScale = 4.0
+        webView.scrollView.bouncesZoom = true
+        webView.backgroundColor = .white
+        return webView
+    }
+    
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        webView.loadHTMLString(htmlContent, baseURL: nil)
+    }
+}
+
+// (moved applyContactEdits below platform conditionals)
+#else
+struct InteractiveWebView: NSViewRepresentable {
     let htmlContent: String
     
     func makeNSView(context: Context) -> WKWebView {
@@ -754,6 +1005,58 @@ struct PDFShareView: UIViewControllerRepresentable {
 }
 #endif
 
+// MARK: - Apply Contact Edits
+extension BillScreen {
+    fileprivate func applyContactEdits(address: String, email: String, phone: String, isPermanent: Bool) async {
+        showingEditContact = false
+        do {
+            if isPermanent {
+                let db = Firestore.firestore()
+                try await db.collection("Data").document("address").setData(["address": address], merge: true)
+                try await db.collection("Data").document("email").setData(["email": email], merge: true)
+                try await db.collection("Data").document("phone").setData(["phone": phone], merge: true)
+            }
+            if var purchase = self.purchase {
+                purchase = Purchase(
+                    id: purchase.id,
+                    transactionDate: purchase.transactionDate,
+                    orderNumber: purchase.orderNumber,
+                    subtotal: purchase.subtotal,
+                    gstPercentage: purchase.gstPercentage,
+                    gstAmount: purchase.gstAmount,
+                    pstPercentage: purchase.pstPercentage,
+                    pstAmount: purchase.pstAmount,
+                    adjustmentAmount: purchase.adjustmentAmount,
+                    adjustmentUnit: purchase.adjustmentUnit,
+                    grandTotal: purchase.grandTotal,
+                    notes: purchase.notes,
+                    purchasedPhones: purchase.purchasedPhones,
+                    paymentMethods: purchase.paymentMethods,
+                    supplierName: purchase.supplierName,
+                    supplierAddress: purchase.supplierAddress,
+                    middlemanName: purchase.middlemanName,
+                    middlemanPayment: purchase.middlemanPayment,
+                    supplierPhone: purchase.supplierPhone,
+                    companyAddress: address,
+                    companyEmail: email,
+                    companyPhone: phone
+                )
+                let billGenerator = BillGenerator()
+                let pages = try billGenerator.generateBillHTML(for: purchase)
+                await MainActor.run {
+                    self.purchase = purchase
+                    self.htmlPages = pages
+                    self.htmlContent = pages.first ?? ""
+                    self.currentPage = 0
+                    self.pdfData = nil // regenerate PDF via hidden webview
+                }
+            }
+        } catch {
+            print("❌ Failed to apply contact edits: \(error)")
+        }
+    }
+}
+
 // MARK: - Purchase Model
 struct Purchase {
     let id: String
@@ -774,6 +1077,11 @@ struct Purchase {
     let supplierAddress: String?
     let middlemanName: String?
     let middlemanPayment: [String: Any]?
+    // Added for bill header and supplier details
+    let supplierPhone: String?
+    let companyAddress: String?
+    let companyEmail: String?
+    let companyPhone: String?
     
     static func fromFirestore(data: [String: Any], id: String) throws -> Purchase {
         guard let transactionDate = (data["transactionDate"] as? Timestamp)?.dateValue(),
@@ -815,7 +1123,11 @@ struct Purchase {
             supplierName: supplierName,
             supplierAddress: supplierAddress,
             middlemanName: middlemanName,
-            middlemanPayment: middlemanPayment
+            middlemanPayment: middlemanPayment,
+            supplierPhone: nil,
+            companyAddress: nil,
+            companyEmail: nil,
+            companyPhone: nil
         )
     }
 }

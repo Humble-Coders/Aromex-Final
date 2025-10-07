@@ -757,6 +757,7 @@ struct EditProductDialog: View {
         Group {
             #if os(macOS)
             if showingColorDropdown {
+                // ADD THIS:
                 ColorDropdownOverlay(
                     isOpen: $showingColorDropdown,
                     selectedColor: $color,
@@ -766,6 +767,9 @@ struct EditProductDialog: View {
                     buttonFrame: colorButtonFrame,
                     onAddColor: { colorName in
                         addNewColor(colorName)
+                    },
+                    onRenameColor: { oldName, newName in
+                        renameColor(oldName: oldName, newName: newName)
                     }
                 )
             }
@@ -777,6 +781,7 @@ struct EditProductDialog: View {
         Group {
             #if os(macOS)
             if showingCapacityDropdown {
+                // ADD THIS:
                 CapacityDropdownOverlay(
                     isOpen: $showingCapacityDropdown,
                     selectedCapacity: $capacity,
@@ -786,6 +791,9 @@ struct EditProductDialog: View {
                     buttonFrame: capacityButtonFrame,
                     onAddCapacity: { capacityName in
                         addNewCapacity(capacityName)
+                    },
+                    onRenameCapacity: { oldName, newName in
+                        renameCapacity(oldName: oldName, newName: newName)
                     }
                 )
             }
@@ -1004,6 +1012,9 @@ struct EditProductDialog: View {
                     buttonFrame: carrierButtonFrame,
                     onAddCarrier: { carrierName in
                         addNewCarrier(carrierName)
+                    },
+                    onRenameCarrier: { oldName, newName in
+                        renameCarrier(oldName: oldName, newName: newName)
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1081,6 +1092,9 @@ struct EditProductDialog: View {
                     buttonFrame: modelButtonFrame,
                     onAddModel: { modelName in
                         addNewModel(modelName)
+                    },
+                    onRenameModel: { oldName, newName in
+                        renameModel(oldName: oldName, newName: newName)
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1124,6 +1138,9 @@ struct EditProductDialog: View {
                     buttonFrame: brandButtonFrame,
                     onAddBrand: { brandName in
                         addNewBrand(brandName)
+                    },
+                    onRenameBrand: { oldName, newName in
+                        renameBrand(oldName: oldName, newName: newName)
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1167,6 +1184,9 @@ struct EditProductDialog: View {
                     buttonFrame: colorButtonFrame,
                     onAddColor: { colorName in
                         addNewColor(colorName)
+                    },
+                    onRenameColor: { oldName, newName in
+                        renameColor(oldName: oldName, newName: newName)
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1211,6 +1231,9 @@ struct EditProductDialog: View {
                     buttonFrame: capacityButtonFrame,
                     onAddCapacity: { capacityName in
                         addNewCapacity(capacityName)
+                    },
+                    onRenameCapacity: { oldName, newName in
+                        renameCapacity(oldName: oldName, newName: newName)
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1326,6 +1349,9 @@ struct EditProductDialog: View {
                     buttonFrame: brandButtonFrame,
                     onAddBrand: { brandName in
                         addNewBrand(brandName)
+                    },
+                    onRenameBrand: { oldName, newName in
+                        renameBrand(oldName: oldName, newName: newName)
                     }
                 )
             }
@@ -1346,6 +1372,9 @@ struct EditProductDialog: View {
                     buttonFrame: modelButtonFrame,
                     onAddModel: { modelName in
                         addNewModel(modelName)
+                    },
+                    onRenameModel: { oldName, newName in
+                        renameModel(oldName: oldName, newName: newName)
                     }
                 )
             }
@@ -1357,6 +1386,7 @@ struct EditProductDialog: View {
         Group {
             #if os(macOS)
             if showingCarrierDropdown {
+                // ADD THIS:
                 CarrierDropdownOverlay(
                     isOpen: $showingCarrierDropdown,
                     selectedCarrier: $selectedCarrier,
@@ -1366,6 +1396,9 @@ struct EditProductDialog: View {
                     buttonFrame: carrierButtonFrame,
                     onAddCarrier: { carrierName in
                         addNewCarrier(carrierName)
+                    },
+                    onRenameCarrier: { oldName, newName in
+                        renameCarrier(oldName: oldName, newName: newName)
                     }
                 )
             }
@@ -1423,6 +1456,9 @@ struct EditProductDialog: View {
                     buttonFrame: storageLocationButtonFrame,
                     onAddStorageLocation: { locationName in
                         addNewStorageLocation(locationName)
+                    },
+                    onRenameStorageLocation: { oldName, newName in
+                        renameStorageLocation(oldName: oldName, newName: newName)
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1436,6 +1472,7 @@ struct EditProductDialog: View {
         Group {
             #if os(macOS)
             if showingStorageLocationDropdown {
+                // ADD THIS:
                 StorageLocationDropdownOverlay(
                     isOpen: $showingStorageLocationDropdown,
                     selectedStorageLocation: $selectedStorageLocation,
@@ -1445,6 +1482,9 @@ struct EditProductDialog: View {
                     buttonFrame: storageLocationButtonFrame,
                     onAddStorageLocation: { locationName in
                         addNewStorageLocation(locationName)
+                    },
+                    onRenameStorageLocation: { oldName, newName in
+                        renameStorageLocation(oldName: oldName, newName: newName)
                     }
                 )
             }
@@ -1488,6 +1528,9 @@ struct EditProductDialog: View {
                     buttonFrame: carrierButtonFrame,
                     onAddCarrier: { carrierName in
                         addNewCarrier(carrierName)
+                    },
+                    onRenameCarrier: { oldName, newName in
+                        renameCarrier(oldName: oldName, newName: newName)
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1533,6 +1576,9 @@ struct EditProductDialog: View {
                     buttonFrame: modelButtonFrame,
                     onAddModel: { modelName in
                         addNewModel(modelName)
+                    },
+                    onRenameModel: { oldName, newName in
+                        renameModel(oldName: oldName, newName: newName)
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1577,6 +1623,9 @@ struct EditProductDialog: View {
                     buttonFrame: brandButtonFrame,
                     onAddBrand: { brandName in
                         addNewBrand(brandName)
+                    },
+                    onRenameBrand: { oldName, newName in
+                        renameBrand(oldName: oldName, newName: newName)
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1646,15 +1695,18 @@ struct EditProductDialog: View {
             // Inline dropdown (iOS only)
             #if os(iOS)
             if showingColorDropdown {
-                ColorDropdownOverlay(
-                    isOpen: $showingColorDropdown,
-                    selectedColor: $color,
-                    searchText: $colorSearchText,
-                    internalSearchText: $colorInternalSearchText,
-                    colors: colors,
-                    buttonFrame: colorButtonFrame,
-                    onAddColor: { colorName in
-                        addNewColor(colorName)
+                CapacityDropdownOverlay(
+                    isOpen: $showingCapacityDropdown,
+                    selectedCapacity: $capacity,
+                    searchText: $capacitySearchText,
+                    internalSearchText: $capacityInternalSearchText,
+                    capacities: capacities,
+                    buttonFrame: capacityButtonFrame,
+                    onAddCapacity: { capacityName in
+                        addNewCapacity(capacityName)
+                    },
+                    onRenameCapacity: { oldName, newName in
+                        renameCapacity(oldName: oldName, newName: newName)
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1700,6 +1752,9 @@ struct EditProductDialog: View {
                     buttonFrame: capacityButtonFrame,
                     onAddCapacity: { capacityName in
                         addNewCapacity(capacityName)
+                    },
+                    onRenameCapacity: { oldName, newName in
+                        renameCapacity(oldName: oldName, newName: newName)
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1745,6 +1800,9 @@ struct EditProductDialog: View {
                     buttonFrame: storageLocationButtonFrame,
                     onAddStorageLocation: { locationName in
                         addNewStorageLocation(locationName)
+                    },
+                    onRenameStorageLocation: { oldName, newName in
+                        renameStorageLocation(oldName: oldName, newName: newName)
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -2017,6 +2075,149 @@ struct EditProductDialog: View {
     }
     
     // MARK: - Database Functions
+    private func renameCarrier(oldName: String, newName: String) {
+        let trimmedOld = oldName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNew = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedOld.isEmpty, !trimmedNew.isEmpty, trimmedOld != trimmedNew else { return }
+        let db = Firestore.firestore()
+        db.collection("Carriers")
+            .whereField("carrier", isEqualTo: trimmedOld)
+            .limit(to: 1)
+            .getDocuments { snapshot, error in
+                if let error = error {
+                    print("Error finding carrier to rename: \(error)")
+                    return
+                }
+                guard let doc = snapshot?.documents.first else {
+                    print("Carrier document not found for name: \(trimmedOld)")
+                    return
+                }
+                doc.reference.setData(["carrier": trimmedNew], merge: true) { setError in
+                    if let setError = setError {
+                        print("Error renaming carrier: \(setError)")
+                        return
+                    }
+                    DispatchQueue.main.async {
+                        if let idx = self.carriers.firstIndex(where: { $0.caseInsensitiveCompare(trimmedOld) == .orderedSame }) {
+                            self.carriers[idx] = trimmedNew
+                            self.carriers.sort()
+                        }
+                        if self.selectedCarrier == trimmedOld {
+                            self.selectedCarrier = trimmedNew
+                            self.carrierSearchText = trimmedNew
+                        }
+                    }
+                }
+            }
+    }
+
+    private func renameColor(oldName: String, newName: String) {
+        let trimmedOld = oldName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNew = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedOld.isEmpty, !trimmedNew.isEmpty, trimmedOld != trimmedNew else { return }
+        let db = Firestore.firestore()
+        db.collection("Colors")
+            .whereField("color", isEqualTo: trimmedOld)
+            .limit(to: 1)
+            .getDocuments { snapshot, error in
+                if let error = error {
+                    print("Error finding color to rename: \(error)")
+                    return
+                }
+                guard let doc = snapshot?.documents.first else {
+                    print("Color document not found for name: \(trimmedOld)")
+                    return
+                }
+                doc.reference.setData(["color": trimmedNew], merge: true) { setError in
+                    if let setError = setError {
+                        print("Error renaming color: \(setError)")
+                        return
+                    }
+                    DispatchQueue.main.async {
+                        if let idx = self.colors.firstIndex(where: { $0.caseInsensitiveCompare(trimmedOld) == .orderedSame }) {
+                            self.colors[idx] = trimmedNew
+                            self.colors.sort()
+                        }
+                        if self.color == trimmedOld {
+                            self.color = trimmedNew
+                            self.colorSearchText = trimmedNew
+                        }
+                    }
+                }
+            }
+    }
+
+    private func renameCapacity(oldName: String, newName: String) {
+        let trimmedOld = oldName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNew = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedOld.isEmpty, !trimmedNew.isEmpty, trimmedOld != trimmedNew else { return }
+        let db = Firestore.firestore()
+        db.collection("Capacities")
+            .whereField("capacity", isEqualTo: trimmedOld)
+            .limit(to: 1)
+            .getDocuments { snapshot, error in
+                if let error = error {
+                    print("Error finding capacity to rename: \(error)")
+                    return
+                }
+                guard let doc = snapshot?.documents.first else {
+                    print("Capacity document not found for name: \(trimmedOld)")
+                    return
+                }
+                doc.reference.setData(["capacity": trimmedNew], merge: true) { setError in
+                    if let setError = setError {
+                        print("Error renaming capacity: \(setError)")
+                        return
+                    }
+                    DispatchQueue.main.async {
+                        if let idx = self.capacities.firstIndex(where: { $0.caseInsensitiveCompare(trimmedOld) == .orderedSame }) {
+                            self.capacities[idx] = trimmedNew
+                            self.capacities.sort()
+                        }
+                        if self.capacity == trimmedOld {
+                            self.capacity = trimmedNew
+                            self.capacitySearchText = trimmedNew
+                        }
+                    }
+                }
+            }
+    }
+
+    private func renameStorageLocation(oldName: String, newName: String) {
+        let trimmedOld = oldName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNew = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedOld.isEmpty, !trimmedNew.isEmpty, trimmedOld != trimmedNew else { return }
+        let db = Firestore.firestore()
+        db.collection("StorageLocations")
+            .whereField("storageLocation", isEqualTo: trimmedOld)
+            .limit(to: 1)
+            .getDocuments { snapshot, error in
+                if let error = error {
+                    print("Error finding storage location to rename: \(error)")
+                    return
+                }
+                guard let doc = snapshot?.documents.first else {
+                    print("Storage location document not found for name: \(trimmedOld)")
+                    return
+                }
+                doc.reference.setData(["storageLocation": trimmedNew], merge: true) { setError in
+                    if let setError = setError {
+                        print("Error renaming storage location: \(setError)")
+                        return
+                    }
+                    DispatchQueue.main.async {
+                        if let idx = self.storageLocations.firstIndex(where: { $0.caseInsensitiveCompare(trimmedOld) == .orderedSame }) {
+                            self.storageLocations[idx] = trimmedNew
+                            self.storageLocations.sort()
+                        }
+                        if self.selectedStorageLocation == trimmedOld {
+                            self.selectedStorageLocation = trimmedNew
+                            self.storageLocationSearchText = trimmedNew
+                        }
+                    }
+                }
+            }
+    }
     private func fetchCarriers() {
         isLoadingCarriers = true
         let db = Firestore.firestore()
@@ -2088,6 +2289,93 @@ struct EditProductDialog: View {
                             
                             self.phoneModels = modelNames.sorted()
                             print("Sorted models: \(self.phoneModels)")
+                        }
+                    }
+            }
+        }
+    }
+
+    private func renameBrand(oldName: String, newName: String) {
+        let trimmedOld = oldName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNew = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedOld.isEmpty, !trimmedNew.isEmpty, trimmedOld != trimmedNew else { return }
+        let db = Firestore.firestore()
+        db.collection("PhoneBrands")
+            .whereField("brand", isEqualTo: trimmedOld)
+            .limit(to: 1)
+            .getDocuments { snapshot, error in
+                if let error = error {
+                    print("Error finding brand to rename: \(error)")
+                    return
+                }
+                guard let doc = snapshot?.documents.first else {
+                    print("Brand document not found for name: \(trimmedOld)")
+                    return
+                }
+                doc.reference.setData(["brand": trimmedNew], merge: true) { setError in
+                    if let setError = setError {
+                        print("Error renaming brand: \(setError)")
+                        return
+                    }
+                    DispatchQueue.main.async {
+                        if let idx = phoneBrands.firstIndex(where: { $0.caseInsensitiveCompare(trimmedOld) == .orderedSame }) {
+                            phoneBrands[idx] = trimmedNew
+                            phoneBrands.sort()
+                        }
+                        if selectedBrand == trimmedOld {
+                            selectedBrand = trimmedNew
+                            brandSearchText = trimmedNew
+                        }
+                    }
+                }
+            }
+    }
+
+    private func renameModel(oldName: String, newName: String) {
+        guard !selectedBrand.isEmpty else {
+            print("Cannot rename model: brand not selected")
+            return
+        }
+        let brandName = selectedBrand
+        let trimmedOld = oldName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNew = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedOld.isEmpty, !trimmedNew.isEmpty, trimmedOld != trimmedNew else { return }
+        getBrandDocumentId(for: brandName) { brandDocId in
+            let db = Firestore.firestore()
+            DispatchQueue.main.async {
+                guard let brandDocId = brandDocId else {
+                    print("Cannot rename model: brand document not found for \(brandName)")
+                    return
+                }
+                db.collection("PhoneBrands")
+                    .document(brandDocId)
+                    .collection("Models")
+                    .whereField("model", isEqualTo: trimmedOld)
+                    .limit(to: 1)
+                    .getDocuments { snapshot, error in
+                        if let error = error {
+                            print("Error finding model to rename: \(error)")
+                            return
+                        }
+                        guard let doc = snapshot?.documents.first else {
+                            print("Model document not found for name: \(trimmedOld)")
+                            return
+                        }
+                        doc.reference.setData(["model": trimmedNew], merge: true) { setError in
+                            if let setError = setError {
+                                print("Error renaming model: \(setError)")
+                                return
+                            }
+                            DispatchQueue.main.async {
+                                if let idx = phoneModels.firstIndex(where: { $0.caseInsensitiveCompare(trimmedOld) == .orderedSame }) {
+                                    phoneModels[idx] = trimmedNew
+                                    phoneModels.sort()
+                                }
+                                if selectedModel == trimmedOld {
+                                    selectedModel = trimmedNew
+                                    modelSearchText = trimmedNew
+                                }
+                            }
                         }
                     }
             }

@@ -3,23 +3,40 @@ import PDFKit
 
 class BillGenerator {
     
-    // First page can now hold 16 items since payment section moved to last page
-    private let maxItemsFirstPageComplete = 8  // Complete invoice on one page
-    private let maxItemsFirstPageOnly = 16     // First page when splitting
+    // Threshold for deciding which template to use
+    private let maxItemsForSinglePage = 8
+    private let maxItemsForShortFirstPage = 13  // 9-13 items: first page with totals+payment
+    private let maxItemsForLongFirstPage = 16  // 14-16 items: first page without totals
     private let maxItemsPerContinuationPage = 18
     
     func generateBillHTML(for purchase: Purchase) throws -> [String] {
         let itemCount = purchase.purchasedPhones.count
         
-        if itemCount <= maxItemsFirstPageComplete {
+        // Single page: 8 or fewer items
+        if itemCount <= maxItemsForSinglePage {
             return [try generateSinglePageHTML(for: purchase)]
-        } else {
-            return try generateMultiPageHTMLArray(for: purchase)
         }
+        
+        // Short first page with totals: 9-13 items
+        if itemCount <= maxItemsForShortFirstPage {
+            return [try generateShortFirstPageHTML(for: purchase)]
+        }
+        
+        // Multi-page: 14+ items
+        return try generateMultiPageHTMLArray(for: purchase)
     }
     
     private func generateSinglePageHTML(for purchase: Purchase) throws -> String {
         guard let templatePath = Bundle.main.path(forResource: "invoice_single_page", ofType: "html"),
+              let templateContent = try? String(contentsOfFile: templatePath, encoding: .utf8) else {
+            throw BillGenerationError.templateNotFound
+        }
+        
+        return try populateTemplate(templateContent, with: purchase, items: purchase.purchasedPhones)
+    }
+    
+    private func generateShortFirstPageHTML(for purchase: Purchase) throws -> String {
+        guard let templatePath = Bundle.main.path(forResource: "invoice_first_page_short", ofType: "html"),
               let templateContent = try? String(contentsOfFile: templatePath, encoding: .utf8) else {
             throw BillGenerationError.templateNotFound
         }
@@ -32,11 +49,11 @@ class BillGenerator {
         let allItems = purchase.purchasedPhones
         
         // First page with up to 16 items
-        let firstPageItems = Array(allItems.prefix(maxItemsFirstPageOnly))
+        let firstPageItems = Array(allItems.prefix(maxItemsForLongFirstPage))
         let firstPageHTML = try generateFirstPage(for: purchase, items: firstPageItems)
         htmlPages.append(firstPageHTML)
         
-        var remainingItems = Array(allItems.dropFirst(maxItemsFirstPageOnly))
+        var remainingItems = Array(allItems.dropFirst(maxItemsForLongFirstPage))
         
         // Middle pages with continuation items
         while remainingItems.count > maxItemsPerContinuationPage {
@@ -103,7 +120,6 @@ class BillGenerator {
         
         var html = template
         html = html.replacingOccurrences(of: "{{supplier_name}}", with: purchase.supplierName ?? "N/A")
-        html = html.replacingOccurrences(of: "{{supplier_entity_type}}", with: "Supplier")
         html = html.replacingOccurrences(of: "{{order_number}}", with: "ORD-\(purchase.orderNumber)")
         html = html.replacingOccurrences(of: "{{transaction_date}}", with: formattedDate)
         html = html.replacingOccurrences(of: "{{subtotal}}", with: String(format: "%.2f", purchase.subtotal))
@@ -116,6 +132,20 @@ class BillGenerator {
         html = html.replacingOccurrences(of: "{{grand_total}}", with: String(format: "%.2f", purchase.grandTotal))
         html = html.replacingOccurrences(of: "{{notes}}", with: purchase.notes.isEmpty ? "No additional notes" : purchase.notes)
         html = html.replacingOccurrences(of: "{{items}}", with: itemsHTML)
+
+        // Company header info
+        if let companyAddress = purchase.companyAddress, !companyAddress.isEmpty {
+            html = html.replacingOccurrences(of: "123 Business Avenue, Suite 100, City, State 12345", with: companyAddress)
+        }
+        if let companyEmail = purchase.companyEmail, !companyEmail.isEmpty,
+           let companyPhone = purchase.companyPhone, !companyPhone.isEmpty {
+            html = html.replacingOccurrences(of: "Email: info@aromex.com | Phone: (123) 456-7890", with: "Email: \(companyEmail) | Phone: \(companyPhone)")
+        }
+        
+        // Supplier phone in place of entity type
+        if let supplierPhone = purchase.supplierPhone, !supplierPhone.isEmpty {
+            html = html.replacingOccurrences(of: "{{supplier_entity_type}}", with: supplierPhone)
+        }
         
         let cashPaid = purchase.paymentMethods["cash"] as? Double ?? 0.0
         let bankPaid = purchase.paymentMethods["bank"] as? Double ?? 0.0
@@ -123,13 +153,24 @@ class BillGenerator {
         let totalPaid = purchase.paymentMethods["totalPaid"] as? Double ?? 0.0
         let remainingCredit = purchase.paymentMethods["remainingCredit"] as? Double ?? 0.0
         
-        html = html.replacingOccurrences(of: "{{payment_cash}}", with: String(format: "%.2f", cashPaid))
-        html = html.replacingOccurrences(of: "{{payment_bank}}", with: String(format: "%.2f", bankPaid))
-        html = html.replacingOccurrences(of: "{{payment_credit_card}}", with: String(format: "%.2f", creditCardPaid))
-        html = html.replacingOccurrences(of: "{{payment_total_paid}}", with: String(format: "%.2f", totalPaid))
-        html = html.replacingOccurrences(of: "{{payment_remaining_credit}}", with: String(format: "%.2f", remainingCredit))
+        // Format payment amounts with color for negatives
+        html = html.replacingOccurrences(of: "{{payment_cash}}", with: formatAmount(cashPaid))
+        html = html.replacingOccurrences(of: "{{payment_bank}}", with: formatAmount(bankPaid))
+        html = html.replacingOccurrences(of: "{{payment_credit_card}}", with: formatAmount(creditCardPaid))
+        html = html.replacingOccurrences(of: "{{payment_total_paid}}", with: formatAmount(totalPaid))
+        html = html.replacingOccurrences(of: "{{payment_remaining_credit}}", with: formatAmount(remainingCredit))
         
         return html
+    }
+    
+    private func formatAmount(_ amount: Double) -> String {
+        let absAmount = abs(amount)
+        let formattedValue = String(format: "$%.2f", absAmount)
+        
+        if amount < 0 {
+            return "<span class=\"amount-negative\">\(formattedValue)</span>"
+        }
+        return formattedValue
     }
     
     private func generateItemsRows(for phones: [[String: Any]]) -> String {
@@ -138,19 +179,15 @@ class BillGenerator {
         for phoneData in phones {
             let description = generatePhoneDescription(phoneData)
             let imei = phoneData["imei"] as? String ?? "N/A"
-            let status = phoneData["status"] as? String ?? "N/A"
-            let storageLocation = phoneData["storageLocation"] as? String ?? "N/A"
             let unitCost = phoneData["unitCost"] as? Double ?? 0.0
             let total = unitCost
             
             rows += """
             <tr>
                 <td><div class="item-description">\(description)</div></td>
-                <td class="text-center">\(imei)</td>
-                <td class="text-center">\(status)</td>
-                <td class="text-center">\(storageLocation)</td>
-                <td class="text-right">$\(String(format: "%.2f", unitCost))</td>
-                <td class="text-right">$\(String(format: "%.2f", total))</td>
+                <td>\(imei)</td>
+                <td>$\(String(format: "%.2f", unitCost))</td>
+                <td>$\(String(format: "%.2f", total))</td>
             </tr>
             """
         }

@@ -179,6 +179,7 @@
             border-bottom: 1px solid #f0f0f0;
             font-size: 13px;
             vertical-align: top;
+            text-align: left;
         }
         
         .items-table tr:last-child td {
@@ -315,6 +316,8 @@
             padding-top: 15px;
             border-top: 2px solid #007AFF;
         }
+        /* Hide Status and Location columns while keeping table structure */
+        /* status/location columns removed from markup */
         
         /* Middleman Section */
         .middleman-section {
@@ -457,9 +460,7 @@
                 <thead>
                     <tr>
                         <th style="width: 40%;">Item Description</th>
-                        <th style="width: 15%;">IMEI</th>
-                        <th style="width: 10%;">Status</th>
-                        <th style="width: 10%;">Location</th>
+                        <th style="width: 30%;">IMEI/Serial</th>
                         <th style="width: 15%;" class="text-right">Unit Cost</th>
                         <th style="width: 10%;" class="text-right">Total</th>
                     </tr>
@@ -503,19 +504,19 @@
                 <div class="payment-grid">
                     <div class="payment-item">
                         <span class="method">Cash</span>
-                        <span class="amount">${{payment_cash}}</span>
+                        <span class="amount">{{payment_cash}}</span>
                     </div>
                     <div class="payment-item">
                         <span class="method">Bank Transfer</span>
-                        <span class="amount">${{payment_bank}}</span>
+                        <span class="amount">{{payment_bank}}</span>
                     </div>
                     <div class="payment-item">
                         <span class="method">Credit Card</span>
-                        <span class="amount">${{payment_credit_card}}</span>
+                        <span class="amount">{{payment_credit_card}}</span>
                     </div>
                     <div class="payment-item">
                         <span class="method">Credit</span>
-                        <span class="amount">${{payment_remaining_credit}}</span>
+                        <span class="amount">{{payment_remaining_credit}}</span>
                     </div>
                 </div>
             </div>
@@ -523,11 +524,11 @@
                 <div class="section-title">Payment Summary</div>
                 <div class="summary-item">
                     <span>Total Paid:</span>
-                    <span>${{payment_total_paid}}</span>
+                    <span>{{payment_total_paid}}</span>
                 </div>
                 <div class="summary-item">
                     <span>Remaining Credit:</span>
-                    <span>${{payment_remaining_credit}}</span>
+                    <span>{{payment_remaining_credit}}</span>
                 </div>
             </div>
         </div>

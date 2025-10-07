@@ -314,11 +314,11 @@ struct ContentView: View {
         } detail: {
             if selectedMenuItem == "Bill" {
                 BillScreen(purchaseId: billPurchaseId, onClose: { 
-                    selectedMenuItem = "Home"
+                    // Return to Purchase and ensure bill screen is dismissed
+                    selectedMenuItem = "Purchase"
                     showingBillScreen = false
                 })
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .ignoresSafeArea(.all)
             } else {
                 MainContentView(
                     selectedMenuItem: $selectedMenuItem,
@@ -368,19 +368,21 @@ struct ContentView: View {
             )
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .navigationBarLeading) {
-                        Button(action: {
-                            showingSidebar = true
-                        }) {
-                            Image(systemName: "line.horizontal.3")
-                                .foregroundColor(.primary)
+                    if selectedMenuItem != "Bill" && !showingBillScreen {
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            Button(action: {
+                                showingSidebar = true
+                            }) {
+                                Image(systemName: "line.horizontal.3")
+                                    .foregroundColor(.primary)
+                            }
                         }
-                    }
-                    
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Button(action: {}) {
-                            Image(systemName: "person.circle")
-                                .foregroundColor(.primary)
+                        
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button(action: {}) {
+                                Image(systemName: "person.circle")
+                                    .foregroundColor(.primary)
+                            }
                         }
                     }
                 }
@@ -552,7 +554,8 @@ struct MainContentView: View {
                     #endif
                 } else if selectedMenuItem == "Bill" {
                     BillScreen(purchaseId: billPurchaseId, onClose: { 
-                        selectedMenuItem = "Home"
+                        // Return to Purchase and ensure bill screen is dismissed
+                        selectedMenuItem = "Purchase"
                         showingBillScreen = false
                     })
                         .frame(maxWidth: .infinity, maxHeight: .infinity)

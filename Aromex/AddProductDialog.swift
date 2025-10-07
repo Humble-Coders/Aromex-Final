@@ -230,6 +230,44 @@ struct AddProductDialog: View {
         isPresented = false
         onDismiss?()
     }
+
+    // MARK: - Rename Helpers (Firestore)
+    private func renameBrand(oldName: String, newName: String) {
+        let trimmedOld = oldName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNew = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedOld.isEmpty, !trimmedNew.isEmpty, trimmedOld != trimmedNew else { return }
+        let db = Firestore.firestore()
+        db.collection("PhoneBrands")
+            .whereField("brand", isEqualTo: trimmedOld)
+            .limit(to: 1)
+            .getDocuments { snapshot, error in
+                if let error = error {
+                    print("Error finding brand to rename: \(error)")
+                    return
+                }
+                guard let doc = snapshot?.documents.first else {
+                    print("Brand document not found for name: \(trimmedOld)")
+                    return
+                }
+                doc.reference.setData(["brand": trimmedNew], merge: true) { setError in
+                    if let setError = setError {
+                        print("Error renaming brand: \(setError)")
+                        return
+                    }
+                    DispatchQueue.main.async {
+                        // Update local state
+                        if let idx = phoneBrands.firstIndex(where: { $0.caseInsensitiveCompare(trimmedOld) == .orderedSame }) {
+                            phoneBrands[idx] = trimmedNew
+                            phoneBrands.sort()
+                        }
+                        if selectedBrand == trimmedOld {
+                            selectedBrand = trimmedNew
+                            brandSearchText = trimmedNew
+                        }
+                    }
+                }
+            }
+    }
     
     var shouldShowiPhoneDialog: Bool {
         #if os(iOS)
@@ -773,6 +811,9 @@ struct AddProductDialog: View {
                     buttonFrame: colorButtonFrame,
                     onAddColor: { colorName in
                         addNewColor(colorName)
+                    },
+                    onRenameColor: { oldName, newName in
+                        renameColor(oldName: oldName, newName: newName)
                     }
                 )
             }
@@ -793,6 +834,9 @@ struct AddProductDialog: View {
                     buttonFrame: capacityButtonFrame,
                     onAddCapacity: { capacityName in
                         addNewCapacity(capacityName)
+                    },
+                    onRenameCapacity: { oldName, newName in
+                        renameCapacity(oldName: oldName, newName: newName)
                     }
                 )
             }
@@ -1011,6 +1055,9 @@ struct AddProductDialog: View {
                     buttonFrame: carrierButtonFrame,
                     onAddCarrier: { carrierName in
                         addNewCarrier(carrierName)
+                    },
+                    onRenameCarrier: { oldName, newName in
+                        renameCarrier(oldName: oldName, newName: newName)
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1088,6 +1135,9 @@ struct AddProductDialog: View {
                     buttonFrame: modelButtonFrame,
                     onAddModel: { modelName in
                         addNewModel(modelName)
+                    },
+                    onRenameModel: { oldName, newName in
+                        renameModel(oldName: oldName, newName: newName)
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1131,6 +1181,9 @@ struct AddProductDialog: View {
                     buttonFrame: brandButtonFrame,
                     onAddBrand: { brandName in
                         addNewBrand(brandName)
+                    },
+                    onRenameBrand: { oldName, newName in
+                        renameBrand(oldName: oldName, newName: newName)
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1174,6 +1227,9 @@ struct AddProductDialog: View {
                     buttonFrame: colorButtonFrame,
                     onAddColor: { colorName in
                         addNewColor(colorName)
+                    },
+                    onRenameColor: { oldName, newName in
+                        renameColor(oldName: oldName, newName: newName)
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1218,6 +1274,9 @@ struct AddProductDialog: View {
                     buttonFrame: capacityButtonFrame,
                     onAddCapacity: { capacityName in
                         addNewCapacity(capacityName)
+                    },
+                    onRenameCapacity: { oldName, newName in
+                        renameCapacity(oldName: oldName, newName: newName)
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1333,6 +1392,9 @@ struct AddProductDialog: View {
                     buttonFrame: brandButtonFrame,
                     onAddBrand: { brandName in
                         addNewBrand(brandName)
+                    },
+                    onRenameBrand: { oldName, newName in
+                        renameBrand(oldName: oldName, newName: newName)
                     }
                 )
             }
@@ -1353,6 +1415,9 @@ struct AddProductDialog: View {
                     buttonFrame: modelButtonFrame,
                     onAddModel: { modelName in
                         addNewModel(modelName)
+                    },
+                    onRenameModel: { oldName, newName in
+                        renameModel(oldName: oldName, newName: newName)
                     }
                 )
             }
@@ -1373,6 +1438,9 @@ struct AddProductDialog: View {
                     buttonFrame: carrierButtonFrame,
                     onAddCarrier: { carrierName in
                         addNewCarrier(carrierName)
+                    },
+                    onRenameCarrier: { oldName, newName in
+                        renameCarrier(oldName: oldName, newName: newName)
                     }
                 )
             }
@@ -1430,6 +1498,9 @@ struct AddProductDialog: View {
                     buttonFrame: storageLocationButtonFrame,
                     onAddStorageLocation: { locationName in
                         addNewStorageLocation(locationName)
+                    },
+                    onRenameStorageLocation: { oldName, newName in
+                        renameStorageLocation(oldName: oldName, newName: newName)
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1452,6 +1523,9 @@ struct AddProductDialog: View {
                     buttonFrame: storageLocationButtonFrame,
                     onAddStorageLocation: { locationName in
                         addNewStorageLocation(locationName)
+                    },
+                    onRenameStorageLocation: { oldName, newName in
+                        renameStorageLocation(oldName: oldName, newName: newName)
                     }
                 )
             }
@@ -1495,6 +1569,9 @@ struct AddProductDialog: View {
                     buttonFrame: carrierButtonFrame,
                     onAddCarrier: { carrierName in
                         addNewCarrier(carrierName)
+                    },
+                    onRenameCarrier: { oldName, newName in
+                        renameCarrier(oldName: oldName, newName: newName)
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1540,6 +1617,9 @@ struct AddProductDialog: View {
                     buttonFrame: modelButtonFrame,
                     onAddModel: { modelName in
                         addNewModel(modelName)
+                    },
+                    onRenameModel: { oldName, newName in
+                        renameModel(oldName: oldName, newName: newName)
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1584,6 +1664,9 @@ struct AddProductDialog: View {
                     buttonFrame: brandButtonFrame,
                     onAddBrand: { brandName in
                         addNewBrand(brandName)
+                    },
+                    onRenameBrand: { oldName, newName in
+                        renameBrand(oldName: oldName, newName: newName)
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1662,6 +1745,9 @@ struct AddProductDialog: View {
                     buttonFrame: colorButtonFrame,
                     onAddColor: { colorName in
                         addNewColor(colorName)
+                    },
+                    onRenameColor: { oldName, newName in
+                        renameColor(oldName: oldName, newName: newName)
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1707,8 +1793,12 @@ struct AddProductDialog: View {
                     buttonFrame: capacityButtonFrame,
                     onAddCapacity: { capacityName in
                         addNewCapacity(capacityName)
+                    },
+                    onRenameCapacity: { oldName, newName in
+                        renameCapacity(oldName: oldName, newName: newName)
                     }
                 )
+
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
@@ -1752,6 +1842,9 @@ struct AddProductDialog: View {
                     buttonFrame: storageLocationButtonFrame,
                     onAddStorageLocation: { locationName in
                         addNewStorageLocation(locationName)
+                    },
+                    onRenameStorageLocation: { oldName, newName in
+                        renameStorageLocation(oldName: oldName, newName: newName)
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -2052,6 +2145,42 @@ struct AddProductDialog: View {
             }
         }
     }
+
+    private func renameCarrier(oldName: String, newName: String) {
+        let trimmedOld = oldName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNew = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedOld.isEmpty, !trimmedNew.isEmpty, trimmedOld != trimmedNew else { return }
+        let db = Firestore.firestore()
+        db.collection("Carriers")
+            .whereField("carrier", isEqualTo: trimmedOld)
+            .limit(to: 1)
+            .getDocuments { snapshot, error in
+                if let error = error {
+                    print("Error finding carrier to rename: \(error)")
+                    return
+                }
+                guard let doc = snapshot?.documents.first else {
+                    print("Carrier document not found for name: \(trimmedOld)")
+                    return
+                }
+                doc.reference.setData(["carrier": trimmedNew], merge: true) { setError in
+                    if let setError = setError {
+                        print("Error renaming carrier: \(setError)")
+                        return
+                    }
+                    DispatchQueue.main.async {
+                        if let idx = carriers.firstIndex(where: { $0.caseInsensitiveCompare(trimmedOld) == .orderedSame }) {
+                            carriers[idx] = trimmedNew
+                            carriers.sort()
+                        }
+                        if selectedCarrier == trimmedOld {
+                            selectedCarrier = trimmedNew
+                            carrierSearchText = trimmedNew
+                        }
+                    }
+                }
+            }
+    }
     
     private func fetchPhoneModels() {
         guard !selectedBrand.isEmpty else {
@@ -2100,6 +2229,129 @@ struct AddProductDialog: View {
             }
         }
     }
+
+    private func renameStorageLocation(oldName: String, newName: String) {
+        let trimmedOld = oldName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNew = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedOld.isEmpty, !trimmedNew.isEmpty, trimmedOld != trimmedNew else { return }
+        let db = Firestore.firestore()
+        db.collection("StorageLocations")
+            .whereField("storageLocation", isEqualTo: trimmedOld)
+            .limit(to: 1)
+            .getDocuments { snapshot, error in
+                if let error = error {
+                    print("Error finding storage location to rename: \(error)")
+                    return
+                }
+                guard let doc = snapshot?.documents.first else {
+                    print("Storage location document not found for name: \(trimmedOld)")
+                    return
+                }
+                doc.reference.setData(["storageLocation": trimmedNew], merge: true) { setError in
+                    if let setError = setError {
+                        print("Error renaming storage location: \(setError)")
+                        return
+                    }
+                    DispatchQueue.main.async {
+                        if let idx = storageLocations.firstIndex(where: { $0.caseInsensitiveCompare(trimmedOld) == .orderedSame }) {
+                            storageLocations[idx] = trimmedNew
+                            storageLocations.sort()
+                        }
+                        if selectedStorageLocation == trimmedOld {
+                            selectedStorageLocation = trimmedNew
+                            storageLocationSearchText = trimmedNew
+                        }
+                    }
+                }
+            }
+    }
+
+    private func renameModel(oldName: String, newName: String) {
+        guard !selectedBrand.isEmpty else {
+            print("Cannot rename model: brand not selected")
+            return
+        }
+        let brandName = selectedBrand
+        let trimmedOld = oldName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNew = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedOld.isEmpty, !trimmedNew.isEmpty, trimmedOld != trimmedNew else { return }
+        getBrandDocumentId(for: brandName) { brandDocId in
+            let db = Firestore.firestore()
+            DispatchQueue.main.async {
+                guard let brandDocId = brandDocId else {
+                    print("Cannot rename model: brand document not found for \(brandName)")
+                    return
+                }
+                db.collection("PhoneBrands")
+                    .document(brandDocId)
+                    .collection("Models")
+                    .whereField("model", isEqualTo: trimmedOld)
+                    .limit(to: 1)
+                    .getDocuments { snapshot, error in
+                        if let error = error {
+                            print("Error finding model to rename: \(error)")
+                            return
+                        }
+                        guard let doc = snapshot?.documents.first else {
+                            print("Model document not found for name: \(trimmedOld)")
+                            return
+                        }
+                        doc.reference.setData(["model": trimmedNew], merge: true) { setError in
+                            if let setError = setError {
+                                print("Error renaming model: \(setError)")
+                                return
+                            }
+                            DispatchQueue.main.async {
+                                if let idx = phoneModels.firstIndex(where: { $0.caseInsensitiveCompare(trimmedOld) == .orderedSame }) {
+                                    phoneModels[idx] = trimmedNew
+                                    phoneModels.sort()
+                                }
+                                if selectedModel == trimmedOld {
+                                    selectedModel = trimmedNew
+                                    modelSearchText = trimmedNew
+                                }
+                            }
+                        }
+                    }
+            }
+        }
+    }
+
+    private func renameColor(oldName: String, newName: String) {
+        let trimmedOld = oldName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNew = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedOld.isEmpty, !trimmedNew.isEmpty, trimmedOld != trimmedNew else { return }
+        let db = Firestore.firestore()
+        db.collection("Colors")
+            .whereField("color", isEqualTo: trimmedOld)
+            .limit(to: 1)
+            .getDocuments { snapshot, error in
+                if let error = error {
+                    print("Error finding color to rename: \(error)")
+                    return
+                }
+                guard let doc = snapshot?.documents.first else {
+                    print("Color document not found for name: \(trimmedOld)")
+                    return
+                }
+                doc.reference.setData(["color": trimmedNew], merge: true) { setError in
+                    if let setError = setError {
+                        print("Error renaming color: \(setError)")
+                        return
+                    }
+                    DispatchQueue.main.async {
+                        if let idx = colors.firstIndex(where: { $0.caseInsensitiveCompare(trimmedOld) == .orderedSame }) {
+                            colors[idx] = trimmedNew
+                            colors.sort()
+                        }
+                        if color == trimmedOld {
+                            color = trimmedNew
+                            colorSearchText = trimmedNew
+                        }
+                    }
+                }
+            }
+    }
     
     private func fetchPhoneBrands() {
         isLoadingBrands = true
@@ -2128,6 +2380,42 @@ struct AddProductDialog: View {
                 print("Sorted brands: \(self.phoneBrands)")
             }
         }
+    }
+
+    private func renameCapacity(oldName: String, newName: String) {
+        let trimmedOld = oldName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNew = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedOld.isEmpty, !trimmedNew.isEmpty, trimmedOld != trimmedNew else { return }
+        let db = Firestore.firestore()
+        db.collection("Capacities")
+            .whereField("capacity", isEqualTo: trimmedOld)
+            .limit(to: 1)
+            .getDocuments { snapshot, error in
+                if let error = error {
+                    print("Error finding capacity to rename: \(error)")
+                    return
+                }
+                guard let doc = snapshot?.documents.first else {
+                    print("Capacity document not found for name: \(trimmedOld)")
+                    return
+                }
+                doc.reference.setData(["capacity": trimmedNew], merge: true) { setError in
+                    if let setError = setError {
+                        print("Error renaming capacity: \(setError)")
+                        return
+                    }
+                    DispatchQueue.main.async {
+                        if let idx = capacities.firstIndex(where: { $0.caseInsensitiveCompare(trimmedOld) == .orderedSame }) {
+                            capacities[idx] = trimmedNew
+                            capacities.sort()
+                        }
+                        if capacity == trimmedOld {
+                            capacity = trimmedNew
+                            capacitySearchText = trimmedNew
+                        }
+                    }
+                }
+            }
     }
     
     private func addNewBrand(_ brandName: String) {
@@ -2684,6 +2972,94 @@ struct AddProductDialog: View {
     }
 }
 
+// MARK: - Shared Edit Icon Button
+struct EditIconButton: View {
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "pencil")
+                .foregroundColor(.primary)
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 36, height: 36)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PlainButtonStyle())
+        .accessibilityLabel("Edit item")
+        .allowsHitTesting(true)  // ADD THIS LINE
+    }
+}
+
+// MARK: - Small Edit Name Sheet
+struct EditNameSheet: View {
+    let title: String
+    @Binding var text: String
+    let onCancel: () -> Void
+    let onSave: () -> Void
+    
+    var body: some View {
+        #if os(iOS)
+        content
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.hidden)
+        #else
+        content
+            .frame(width: 360)
+        #endif
+    }
+    
+    private var content: some View {
+        VStack(spacing: 18) {
+            HStack(spacing: 10) {
+                Image(systemName: "pencil.circle.fill")
+                    .font(.system(size: 22))
+                    .foregroundColor(Color(red: 0.25, green: 0.33, blue: 0.54))
+                Text(title)
+                    .font(.system(size: 18, weight: .semibold))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            
+            VStack(spacing: 12) {
+                TextField("New name", text: $text)
+                    .textFieldStyle(PlainTextFieldStyle())
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(.regularMaterial)
+                    )
+            }
+            
+            HStack(spacing: 12) {
+                Button(action: onCancel) {
+                    Text("Cancel")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(PlainButtonStyle())
+                
+                Button(action: onSave) {
+                    Text("Save")
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(Color(red: 0.25, green: 0.33, blue: 0.54))
+                        )
+                }
+                .buttonStyle(PlainButtonStyle())
+                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .opacity(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.6 : 1.0)
+            }
+        }
+        .padding(20)
+    }
+}
+
     // MARK: - Brand Dropdown Button
 struct BrandDropdownButton: View {
     @Binding var searchText: String
@@ -2805,6 +3181,7 @@ struct BrandDropdownOverlay: View {
     let brands: [String]
     let buttonFrame: CGRect
     let onAddBrand: (String) -> Void
+    let onRenameBrand: (String, String) -> Void
     
     // Removed unused variables since we're using positioned dropdown for all platforms
     
@@ -2834,9 +3211,25 @@ struct BrandDropdownOverlay: View {
             #if os(iOS)
             // Inline dropdown that pushes content down (iOS only)
             inlineDropdown
+                .sheet(isPresented: $showEditNameSheet) {
+                    EditNameSheet(
+                        title: "Edit Brand",
+                        text: $editNewName,
+                        onCancel: { showEditNameSheet = false },
+                        onSave: { commitEdit() }
+                    )
+                }
             #else
             // Positioned dropdown for macOS
             positionedDropdown
+                .sheet(isPresented: $showEditNameSheet) {
+                    EditNameSheet(
+                        title: "Edit Brand",
+                        text: $editNewName,
+                        onCancel: { showEditNameSheet = false },
+                        onSave: { commitEdit() }
+                    )
+                }
             #endif
         }
         .onAppear {
@@ -3021,47 +3414,65 @@ struct BrandDropdownOverlay: View {
     // MARK: - Brand Row Views
     
     private func cleanBrandRow(title: String, isAddOption: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                if isAddOption {
-                    Image(systemName: "plus.circle.fill")
-                        .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40)) // App's green theme
+        HStack(spacing: 12) {
+            // Left tap area selects item (or adds if add-option)
+            Button(action: action) {
+                HStack(spacing: 12) {
+                    if isAddOption {
+                        Image(systemName: "plus.circle.fill")
+                            .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40))
+                            .font(.system(size: 16, weight: .medium))
+                    }
+                    Text(title)
                         .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(isAddOption ? Color(red: 0.20, green: 0.60, blue: 0.40) : .primary)
+                        .fontWeight(isAddOption ? .semibold : .medium)
                 }
-                
-                Text(title)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(isAddOption ? Color(red: 0.20, green: 0.60, blue: 0.40) : .primary)
-                    .fontWeight(isAddOption ? .semibold : .medium)
-                
-                Spacer()
-                
-                if !isAddOption && selectedBrand == title {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40)) // App's green theme
-                        .font(.system(size: 16, weight: .medium))
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
+            .buttonStyle(PlainButtonStyle())
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                Rectangle()
-                    .fill(Color.clear)
-                    .contentShape(Rectangle())
-            )
+            .contentShape(Rectangle())
+            
+            // Checkmark (before edit button)
+            if !isAddOption && selectedBrand == title {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40))
+                    .font(.system(size: 16, weight: .medium))
+            }
+            
+            // Edit button on far right (not for add option)
+            if !isAddOption {
+                EditIconButton { presentEdit(for: title) }
+            }
         }
-        .buttonStyle(PlainButtonStyle())
-        .frame(height: 50) // Increased height for better touch targets
-        .background(
-            // Hover effect for better interaction feedback
-            Rectangle()
-                .fill(Color.secondary.opacity(0.05))
-                .opacity(0)
-        )
-        .onHover { isHovering in
-            // Subtle hover effect for better UX
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 50)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            action()
         }
+    }
+
+    // MARK: - Edit Presentation
+    @State private var showEditNameSheet = false
+    @State private var editOriginalName = ""
+    @State private var editNewName = ""
+
+    private func presentEdit(for name: String) {
+        editOriginalName = name
+        editNewName = name
+        showEditNameSheet = true
+    }
+
+    private func commitEdit() {
+        let oldName = editOriginalName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newName = editNewName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !oldName.isEmpty, !newName.isEmpty, oldName != newName else { return }
+        onRenameBrand(oldName, newName)
+        showEditNameSheet = false
     }
 }
 
@@ -3193,6 +3604,7 @@ struct ModelDropdownOverlay: View {
     let models: [String]
     let buttonFrame: CGRect
     let onAddModel: (String) -> Void
+    let onRenameModel: (String, String) -> Void
     
     private var filteredModels: [String] {
         print("ModelDropdownOverlay - Total models: \(models.count), models: \(models)")
@@ -3220,9 +3632,25 @@ struct ModelDropdownOverlay: View {
             #if os(iOS)
             // Inline dropdown that pushes content down (iOS only)
             inlineDropdown
+                .sheet(isPresented: $showEditNameSheet) {
+                    EditNameSheet(
+                        title: "Edit Model",
+                        text: $editNewName,
+                        onCancel: { showEditNameSheet = false },
+                        onSave: { commitEdit() }
+                    )
+                }
             #else
             // Positioned dropdown for macOS
             positionedDropdown
+                .sheet(isPresented: $showEditNameSheet) {
+                    EditNameSheet(
+                        title: "Edit Model",
+                        text: $editNewName,
+                        onCancel: { showEditNameSheet = false },
+                        onSave: { commitEdit() }
+                    )
+                }
             #endif
         }
         .onAppear {
@@ -3406,47 +3834,60 @@ struct ModelDropdownOverlay: View {
     
     // MARK: - Model Row Views
     private func cleanModelRow(title: String, isAddOption: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                if isAddOption {
-                    Image(systemName: "plus.circle.fill")
-                        .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40)) // App's green theme
+        HStack(spacing: 12) {
+            Button(action: action) {
+                HStack(spacing: 12) {
+                    if isAddOption {
+                        Image(systemName: "plus.circle.fill")
+                            .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40))
+                            .font(.system(size: 16, weight: .medium))
+                    }
+                    Text(title)
                         .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(isAddOption ? Color(red: 0.20, green: 0.60, blue: 0.40) : .primary)
+                        .fontWeight(isAddOption ? .semibold : .medium)
                 }
-                
-                Text(title)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(isAddOption ? Color(red: 0.20, green: 0.60, blue: 0.40) : .primary)
-                    .fontWeight(isAddOption ? .semibold : .medium)
-                
-                Spacer()
-                
-                if !isAddOption && selectedModel == title {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40)) // App's green theme
-                        .font(.system(size: 16, weight: .medium))
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
+            .buttonStyle(PlainButtonStyle())
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                Rectangle()
-                    .fill(Color.clear)
-                    .contentShape(Rectangle())
-            )
+            .contentShape(Rectangle())
+            
+            if !isAddOption && selectedModel == title {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40))
+                    .font(.system(size: 16, weight: .medium))
+            }
+            if !isAddOption {
+                EditIconButton { presentEdit(for: title) }
+            }
         }
-        .buttonStyle(PlainButtonStyle())
-        .frame(height: 50) // Increased height for better touch targets
-        .background(
-            // Hover effect for better interaction feedback
-            Rectangle()
-                .fill(Color.secondary.opacity(0.05))
-                .opacity(0)
-        )
-        .onHover { isHovering in
-            // Subtle hover effect for better UX
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 50)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            action()
         }
+    }
+
+    @State private var showEditNameSheet = false
+    @State private var editOriginalName = ""
+    @State private var editNewName = ""
+
+    private func presentEdit(for name: String) {
+        editOriginalName = name
+        editNewName = name
+        showEditNameSheet = true
+    }
+
+    private func commitEdit() {
+        let oldName = editOriginalName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newName = editNewName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !oldName.isEmpty, !newName.isEmpty, oldName != newName else { return }
+        onRenameModel(oldName, newName)
+        showEditNameSheet = false
     }
 }
 
@@ -3578,6 +4019,7 @@ struct CarrierDropdownOverlay: View {
     let carriers: [String]
     let buttonFrame: CGRect
     let onAddCarrier: (String) -> Void
+    let onRenameCarrier: (String, String) -> Void
     
     private var filteredCarriers: [String] {
         print("CarrierDropdownOverlay - Total carriers: \(carriers.count), carriers: \(carriers)")
@@ -3605,9 +4047,25 @@ struct CarrierDropdownOverlay: View {
             #if os(iOS)
             // Inline dropdown that pushes content down (iOS only)
             inlineDropdown
+                .sheet(isPresented: $showEditNameSheet) {
+                    EditNameSheet(
+                        title: "Edit Carrier",
+                        text: $editNewName,
+                        onCancel: { showEditNameSheet = false },
+                        onSave: { commitEdit() }
+                    )
+                }
             #else
             // Positioned dropdown for macOS
             positionedDropdown
+                .sheet(isPresented: $showEditNameSheet) {
+                    EditNameSheet(
+                        title: "Edit Carrier",
+                        text: $editNewName,
+                        onCancel: { showEditNameSheet = false },
+                        onSave: { commitEdit() }
+                    )
+                }
             #endif
         }
         .onAppear {
@@ -3791,47 +4249,58 @@ struct CarrierDropdownOverlay: View {
     
     // MARK: - Carrier Row Views
     private func cleanCarrierRow(title: String, isAddOption: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                if isAddOption {
-                    Image(systemName: "plus.circle.fill")
-                        .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40)) // App's green theme
+        HStack(spacing: 12) {
+            Button(action: action) {
+                HStack(spacing: 12) {
+                    if isAddOption {
+                        Image(systemName: "plus.circle.fill")
+                            .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40))
+                            .font(.system(size: 16, weight: .medium))
+                    }
+                    Text(title)
                         .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(isAddOption ? Color(red: 0.20, green: 0.60, blue: 0.40) : .primary)
+                        .fontWeight(isAddOption ? .semibold : .medium)
                 }
-                
-                Text(title)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(isAddOption ? Color(red: 0.20, green: 0.60, blue: 0.40) : .primary)
-                    .fontWeight(isAddOption ? .semibold : .medium)
-                
-                Spacer()
-                
-                if !isAddOption && selectedCarrier == title {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40)) // App's green theme
-                        .font(.system(size: 16, weight: .medium))
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
+            .buttonStyle(PlainButtonStyle())
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                Rectangle()
-                    .fill(Color.clear)
-                    .contentShape(Rectangle())
-            )
+            .contentShape(Rectangle())
+            
+            if !isAddOption && selectedCarrier == title {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40))
+                    .font(.system(size: 16, weight: .medium))
+            }
+            if !isAddOption {
+                EditIconButton { presentEdit(for: title) }
+            }
         }
-        .buttonStyle(PlainButtonStyle())
-        .frame(height: 50) // Increased height for better touch targets
-        .background(
-            // Hover effect for better interaction feedback
-            Rectangle()
-                .fill(Color.secondary.opacity(0.05))
-                .opacity(0)
-        )
-        .onHover { isHovering in
-            // Subtle hover effect for better UX
-        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 50)
+        .contentShape(Rectangle())
+        .onTapGesture { action() }
+    }
+
+    @State private var showEditNameSheet = false
+    @State private var editOriginalName = ""
+    @State private var editNewName = ""
+
+    private func presentEdit(for name: String) {
+        editOriginalName = name
+        editNewName = name
+        showEditNameSheet = true
+    }
+
+    private func commitEdit() {
+        let oldName = editOriginalName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newName = editNewName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !oldName.isEmpty, !newName.isEmpty, oldName != newName else { return }
+        onRenameCarrier(oldName, newName)
+        showEditNameSheet = false
     }
 }
 
@@ -4185,6 +4654,7 @@ struct StorageLocationDropdownOverlay: View {
     let storageLocations: [String]
     let buttonFrame: CGRect
     let onAddStorageLocation: (String) -> Void
+    let onRenameStorageLocation: (String, String) -> Void
     
     private var filteredStorageLocations: [String] {
         print("StorageLocationDropdownOverlay - Total locations: \(storageLocations.count), locations: \(storageLocations)")
@@ -4212,9 +4682,25 @@ struct StorageLocationDropdownOverlay: View {
             #if os(iOS)
             // Inline dropdown that pushes content down (iOS only)
             inlineDropdown
+                .sheet(isPresented: $showEditNameSheet) {
+                    EditNameSheet(
+                        title: "Edit Storage Location",
+                        text: $editNewName,
+                        onCancel: { showEditNameSheet = false },
+                        onSave: { commitEdit() }
+                    )
+                }
             #else
             // Positioned dropdown for macOS
             positionedDropdown
+                .sheet(isPresented: $showEditNameSheet) {
+                    EditNameSheet(
+                        title: "Edit Storage Location",
+                        text: $editNewName,
+                        onCancel: { showEditNameSheet = false },
+                        onSave: { commitEdit() }
+                    )
+                }
             #endif
         }
         .onAppear {
@@ -4398,47 +4884,58 @@ struct StorageLocationDropdownOverlay: View {
     
     // MARK: - Storage Location Row Views
     private func cleanStorageLocationRow(title: String, isAddOption: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                if isAddOption {
-                    Image(systemName: "plus.circle.fill")
-                        .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40)) // App's green theme
+        HStack(spacing: 12) {
+            Button(action: action) {
+                HStack(spacing: 12) {
+                    if isAddOption {
+                        Image(systemName: "plus.circle.fill")
+                            .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40))
+                            .font(.system(size: 16, weight: .medium))
+                    }
+                    Text(title)
                         .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(isAddOption ? Color(red: 0.20, green: 0.60, blue: 0.40) : .primary)
+                        .fontWeight(isAddOption ? .semibold : .medium)
                 }
-                
-                Text(title)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(isAddOption ? Color(red: 0.20, green: 0.60, blue: 0.40) : .primary)
-                    .fontWeight(isAddOption ? .semibold : .medium)
-                
-                Spacer()
-                
-                if !isAddOption && selectedStorageLocation == title {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40)) // App's green theme
-                        .font(.system(size: 16, weight: .medium))
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
+            .buttonStyle(PlainButtonStyle())
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                Rectangle()
-                    .fill(Color.clear)
-                    .contentShape(Rectangle())
-            )
+            .contentShape(Rectangle())
+            
+            if !isAddOption && selectedStorageLocation == title {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40))
+                    .font(.system(size: 16, weight: .medium))
+            }
+            if !isAddOption {
+                EditIconButton { presentEdit(for: title) }
+            }
         }
-        .buttonStyle(PlainButtonStyle())
-        .frame(height: 50) // Fixed height for better touch targets
-        .background(
-            // Hover effect for better interaction feedback
-            Rectangle()
-                .fill(Color.secondary.opacity(0.05))
-                .opacity(0)
-        )
-        .onHover { isHovering in
-            // Subtle hover effect for better UX
-        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 50)
+        .contentShape(Rectangle())
+        .onTapGesture { action() }
+    }
+
+    @State private var showEditNameSheet = false
+    @State private var editOriginalName = ""
+    @State private var editNewName = ""
+
+    private func presentEdit(for name: String) {
+        editOriginalName = name
+        editNewName = name
+        showEditNameSheet = true
+    }
+
+    private func commitEdit() {
+        let oldName = editOriginalName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newName = editNewName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !oldName.isEmpty, !newName.isEmpty, oldName != newName else { return }
+        onRenameStorageLocation(oldName, newName)
+        showEditNameSheet = false
     }
 }
 
@@ -7393,6 +7890,21 @@ struct ColorDropdownOverlay: View {
     let colors: [String]
     let buttonFrame: CGRect
     let onAddColor: (String) -> Void
+    let onRenameColor: (String, String) -> Void
+
+    private func presentEdit(for name: String) {
+        editOriginalName = name
+        editNewName = name
+        showEditNameSheet = true
+    }
+
+    private func commitEdit() {
+        let oldName = editOriginalName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newName = editNewName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !oldName.isEmpty, !newName.isEmpty, oldName != newName else { return }
+        onRenameColor(oldName, newName)
+        showEditNameSheet = false
+    }
     
     private var filteredColors: [String] {
         print("ColorDropdownOverlay - Total colors: \(colors.count), colors: \(colors)")
@@ -7417,13 +7929,27 @@ struct ColorDropdownOverlay: View {
     
     var body: some View {
         Group {
-            #if os(iOS)
-            // Inline dropdown that pushes content down (iOS only)
-            inlineDropdown
-            #else
-            // Positioned dropdown for macOS
-            positionedDropdown
-            #endif
+        #if os(iOS)
+        inlineDropdown
+            .sheet(isPresented: $showEditNameSheet) {
+                EditNameSheet(
+                    title: "Edit Color",
+                    text: $editNewName,
+                    onCancel: { showEditNameSheet = false },
+                    onSave: { commitEdit() }
+                )
+            }
+        #else
+        positionedDropdown
+            .sheet(isPresented: $showEditNameSheet) {
+                EditNameSheet(
+                    title: "Edit Color",
+                    text: $editNewName,
+                    onCancel: { showEditNameSheet = false },
+                    onSave: { commitEdit() }
+                )
+            }
+        #endif
         }
         .onAppear {
             print("ColorDropdownOverlay appeared with \(colors.count) colors: \(colors)")
@@ -7600,41 +8126,53 @@ struct ColorDropdownOverlay: View {
     // MARK: - Color Row Views
     
     private func cleanColorRow(title: String, isAddOption: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                if isAddOption {
-                    Image(systemName: "plus.circle.fill")
-                        .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40)) // App's green theme
+        HStack(spacing: 12) {
+            Button(action: action) {
+                HStack(spacing: 12) {
+                    if isAddOption {
+                        Image(systemName: "plus.circle.fill")
+                            .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40))
+                            .font(.system(size: 16, weight: .medium))
+                    }
+                    Text(title)
                         .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(isAddOption ? Color(red: 0.20, green: 0.60, blue: 0.40) : .primary)
+                        .fontWeight(isAddOption ? .semibold : .medium)
                 }
-                
-                Text(title)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(isAddOption ? Color(red: 0.20, green: 0.60, blue: 0.40) : .primary)
-                    .fontWeight(isAddOption ? .semibold : .medium)
-                
-                Spacer()
-                
-                if !isAddOption && selectedColor == title {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40)) // App's green theme
-                        .font(.system(size: 16, weight: .medium))
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
+            .buttonStyle(PlainButtonStyle())
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                Rectangle()
-                    .fill(Color.clear)
-                    .contentShape(Rectangle())
-            )
+            .contentShape(Rectangle())
+            
+            if !isAddOption && selectedColor == title {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40))
+                    .font(.system(size: 16, weight: .medium))
+            }
+            if !isAddOption {
+                Button(action: { presentEdit(for: title) }) {
+                    Image(systemName: "pencil")
+                        .foregroundColor(.primary)
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(width: 36, height: 36)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PlainButtonStyle())
+                .accessibilityLabel("Edit item")
+            }
         }
-        .buttonStyle(PlainButtonStyle())
-        .onHover { isHovering in
-            // Subtle hover effect for better UX
-        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 50)
+        .contentShape(Rectangle())
+        .onTapGesture { action() }
     }
+
+    @State private var showEditNameSheet = false
+    @State private var editOriginalName = ""
+    @State private var editNewName = ""
 }
 
 // MARK: - Capacity Dropdown Button
@@ -7784,6 +8322,7 @@ struct CapacityDropdownOverlay: View {
     let capacities: [String]
     let buttonFrame: CGRect
     let onAddCapacity: (String) -> Void
+    let onRenameCapacity: (String, String) -> Void
     
     private var filteredCapacities: [String] {
         print("CapacityDropdownOverlay - Total capacities: \(capacities.count), capacities: \(capacities)")
@@ -7811,9 +8350,25 @@ struct CapacityDropdownOverlay: View {
             #if os(iOS)
             // Inline dropdown that pushes content down (iOS only)
             inlineDropdown
+                .sheet(isPresented: $showEditNameSheet) {
+                    EditNameSheet(
+                        title: "Edit Capacity",
+                        text: $editNewName,
+                        onCancel: { showEditNameSheet = false },
+                        onSave: { commitEdit() }
+                    )
+                }
             #else
             // Positioned dropdown for macOS
             positionedDropdown
+                .sheet(isPresented: $showEditNameSheet) {
+                    EditNameSheet(
+                        title: "Edit Capacity",
+                        text: $editNewName,
+                        onCancel: { showEditNameSheet = false },
+                        onSave: { commitEdit() }
+                    )
+                }
             #endif
         }
         .onAppear {
@@ -7991,40 +8546,58 @@ struct CapacityDropdownOverlay: View {
     // MARK: - Capacity Row Views
     
     private func cleanCapacityRow(title: String, isAddOption: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                if isAddOption {
-                    Image(systemName: "plus.circle.fill")
-                        .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40)) // App's green theme
+        HStack(spacing: 12) {
+            Button(action: action) {
+                HStack(spacing: 12) {
+                    if isAddOption {
+                        Image(systemName: "plus.circle.fill")
+                            .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40))
+                            .font(.system(size: 16, weight: .medium))
+                    }
+                    Text(title)
                         .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(isAddOption ? Color(red: 0.20, green: 0.60, blue: 0.40) : .primary)
+                        .fontWeight(isAddOption ? .semibold : .medium)
                 }
-                
-                Text(title)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(isAddOption ? Color(red: 0.20, green: 0.60, blue: 0.40) : .primary)
-                    .fontWeight(isAddOption ? .semibold : .medium)
-                
-                Spacer()
-                
-                if !isAddOption && selectedCapacity == title {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40)) // App's green theme
-                        .font(.system(size: 16, weight: .medium))
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
+            .buttonStyle(PlainButtonStyle())
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                Rectangle()
-                    .fill(Color.clear)
-                    .contentShape(Rectangle())
-            )
+            .contentShape(Rectangle())
+            
+            if !isAddOption && selectedCapacity == title {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(Color(red: 0.20, green: 0.60, blue: 0.40))
+                    .font(.system(size: 16, weight: .medium))
+            }
+            if !isAddOption {
+                EditIconButton { presentEdit(for: title) }
+            }
         }
-        .buttonStyle(PlainButtonStyle())
-        .onHover { isHovering in
-            // Subtle hover effect for better UX
-        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 50)
+        .contentShape(Rectangle())
+        .onTapGesture { action() }
+    }
+
+    @State private var showEditNameSheet = false
+    @State private var editOriginalName = ""
+    @State private var editNewName = ""
+
+    private func presentEdit(for name: String) {
+        editOriginalName = name
+        editNewName = name
+        showEditNameSheet = true
+    }
+
+    private func commitEdit() {
+        let oldName = editOriginalName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newName = editNewName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !oldName.isEmpty, !newName.isEmpty, oldName != newName else { return }
+        onRenameCapacity(oldName, newName)
+        showEditNameSheet = false
     }
 }
 

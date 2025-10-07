@@ -41,6 +41,8 @@ struct EditProductDialog: View {
     @State private var isLoadingModels = false
     @FocusState private var isModelFocused: Bool
     @State private var modelInternalSearchText = "" // Internal search for dropdown filtering
+    // Guard to avoid clearing dependent fields during initial prefill
+    @State private var suppressBrandChangeEffects = false
     
     // Carrier dropdown state
     @State private var carrierSearchText = ""
@@ -421,8 +423,11 @@ struct EditProductDialog: View {
             fetchCapacities()
             
             // Pre-fill fields with itemToEdit data
+            suppressBrandChangeEffects = true
             selectedBrand = itemToEdit.brand
             brandSearchText = itemToEdit.brand
+            // Ensure models for the prefilled brand are loaded
+            fetchPhoneModels()
             selectedModel = itemToEdit.model
             modelSearchText = itemToEdit.model
             capacity = itemToEdit.capacity
@@ -437,8 +442,12 @@ struct EditProductDialog: View {
             storageLocationSearchText = itemToEdit.storageLocation
             storedImeis = itemToEdit.imeis
             price = String(format: "%.2f", itemToEdit.unitCost)
+            DispatchQueue.main.async {
+                suppressBrandChangeEffects = false
+            }
         }
         .onChange(of: selectedBrand) { newBrand in
+            if suppressBrandChangeEffects { return }
             // Clear model field whenever brand changes
             selectedModel = ""
             modelSearchText = ""
@@ -572,8 +581,11 @@ struct EditProductDialog: View {
             fetchCapacities()
             
             // Pre-fill fields with itemToEdit data
+            suppressBrandChangeEffects = true
             selectedBrand = itemToEdit.brand
             brandSearchText = itemToEdit.brand
+            // Ensure models for the prefilled brand are loaded
+            fetchPhoneModels()
             selectedModel = itemToEdit.model
             modelSearchText = itemToEdit.model
             capacity = itemToEdit.capacity
@@ -592,6 +604,9 @@ struct EditProductDialog: View {
             #if os(macOS)
             setupBarcodeListener()
             #endif
+            DispatchQueue.main.async {
+                suppressBrandChangeEffects = false
+            }
         }
         .onDisappear {
             #if os(macOS)
@@ -599,6 +614,7 @@ struct EditProductDialog: View {
             #endif
         }
         .onChange(of: selectedBrand) { newBrand in
+            if suppressBrandChangeEffects { return }
             // Clear model field whenever brand changes
             selectedModel = ""
             modelSearchText = ""

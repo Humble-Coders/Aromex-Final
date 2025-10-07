@@ -677,6 +677,7 @@ ScrollView {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
                 .background(Color.primary.opacity(0.02))
+                .drawingGroup()
                 
                 if !isLastItem {
                     Divider()
@@ -802,6 +803,7 @@ ScrollView {
                 .padding(.horizontal, 20)
                 .padding(.vertical, 14)
                 .background(Color.primary.opacity(0.02))
+                .drawingGroup()
                 
                 if !isLastItem {
                     Divider()

@@ -5,7 +5,7 @@ class BillGenerator {
     
     // Threshold for deciding which template to use
     private let maxItemsForSinglePage = 8
-    private let maxItemsForShortFirstPage = 13  // 9-13 items: first page with totals+payment
+    private let maxItemsForShortFirstPage = 13  // 9-13 items
     private let maxItemsForLongFirstPage = 16  // 14-16 items: first page without totals
     private let maxItemsPerContinuationPage = 18
     
@@ -17,9 +17,11 @@ class BillGenerator {
             return [try generateSinglePageHTML(for: purchase)]
         }
         
-        // Short first page with totals: 9-13 items
+        // 9-13 items: put full table on first page, totals/payment/notes on second (footer) page
         if itemCount <= maxItemsForShortFirstPage {
-            return [try generateShortFirstPageHTML(for: purchase)]
+            let firstPageHTML = try generateFirstPage(for: purchase, items: purchase.purchasedPhones)
+            let footerPageHTML = try generateFooterPage(for: purchase)
+            return [firstPageHTML, footerPageHTML]
         }
         
         // Multi-page: 14+ items
@@ -35,14 +37,7 @@ class BillGenerator {
         return try populateTemplate(templateContent, with: purchase, items: purchase.purchasedPhones)
     }
     
-    private func generateShortFirstPageHTML(for purchase: Purchase) throws -> String {
-        guard let templatePath = Bundle.main.path(forResource: "invoice_first_page_short", ofType: "html"),
-              let templateContent = try? String(contentsOfFile: templatePath, encoding: .utf8) else {
-            throw BillGenerationError.templateNotFound
-        }
-        
-        return try populateTemplate(templateContent, with: purchase, items: purchase.purchasedPhones)
-    }
+    // Removed short-first-page generator; 9-13 case uses existing first + footer templates
     
     private func generateMultiPageHTMLArray(for purchase: Purchase) throws -> [String] {
         var htmlPages: [String] = []

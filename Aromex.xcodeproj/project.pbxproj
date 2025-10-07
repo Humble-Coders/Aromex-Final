@@ -7,12 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		6A61265B2E95429000AE1177 /* SalesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A61265A2E95429000AE1177 /* SalesView.swift */; };
 		6A92CA192E674DC3007DECF5 /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = 6A92CA182E674DC3007DECF5 /* FirebaseAnalytics */; };
 		6A92CA1B2E674DC3007DECF5 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = 6A92CA1A2E674DC3007DECF5 /* FirebaseCore */; };
 		6A92CA1D2E674DC3007DECF5 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 6A92CA1C2E674DC3007DECF5 /* FirebaseFirestore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		6A61265A2E95429000AE1177 /* SalesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SalesView.swift; sourceTree = "<group>"; };
 		6AF1A27A2E61AAA7006AB8D0 /* Aromex.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Aromex.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -41,6 +43,7 @@
 		6AF1A2712E61AAA7006AB8D0 = {
 			isa = PBXGroup;
 			children = (
+				6A61265A2E95429000AE1177 /* SalesView.swift */,
 				6AF1A27C2E61AAA7006AB8D0 /* Aromex */,
 				6AF1A27B2E61AAA7006AB8D0 /* Products */,
 			);
@@ -134,6 +137,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				6A61265B2E95429000AE1177 /* SalesView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

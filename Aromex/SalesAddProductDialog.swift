@@ -70,6 +70,18 @@ struct SalesAddProductDialog: View {
     @State private var isAddingModel = false
     @State private var isAddingStorageLocation = false
     
+    // Two-step process state
+    @State private var currentStep: DialogStep = .imeiSelection
+    @State private var selectedDevicesForPricing: [DeviceInfo] = []
+    @State private var deviceSellingPrices: [String: String] = [:] // IMEI -> Selling Price
+    @State private var deviceProfitLoss: [String: Double] = [:] // IMEI -> Profit/Loss amount
+    
+    // Dialog step enum
+    enum DialogStep {
+        case imeiSelection
+        case priceSetting
+    }
+    
     // Device info structure
     struct DeviceInfo: Identifiable, Hashable {
         let id = UUID()
@@ -117,12 +129,26 @@ struct SalesAddProductDialog: View {
                !selectedIMEIs.isEmpty
     }
     
-    // Enable Add Product when required fields are selected
+    // Enable Add Product when required fields are selected and prices are set
     private var isAddEnabled: Bool {
-        return !selectedBrand.isEmpty &&
-               !selectedModel.isEmpty &&
-               !selectedStorageLocation.isEmpty &&
-               !selectedIMEIs.isEmpty
+        switch currentStep {
+        case .imeiSelection:
+            return !selectedBrand.isEmpty &&
+                   !selectedModel.isEmpty &&
+                   !selectedStorageLocation.isEmpty &&
+                   !selectedIMEIs.isEmpty
+        case .priceSetting:
+            // All selected devices must have selling prices set
+            return !selectedDevicesForPricing.isEmpty &&
+                   selectedDevicesForPricing.allSatisfy { device in
+                       !deviceSellingPrices[device.imei, default: ""].isEmpty
+                   }
+        }
+    }
+    
+    // Enable Next button when IMEIs are selected
+    private var isNextEnabled: Bool {
+        return currentStep == .imeiSelection && !selectedIMEIs.isEmpty
     }
     
     private var backgroundColor: Color {
@@ -184,27 +210,47 @@ struct SalesAddProductDialog: View {
                         .padding(.horizontal, 24)
                     
                     // Fixed Table Area - fills remaining space
-                    if !selectedBrand.isEmpty && !selectedModel.isEmpty && !selectedStorageLocation.isEmpty && !filteredDevices.isEmpty {
-                        DeviceFilteringTable(
-                            devices: $filteredDevices,
-                            selectedCapacity: $selectedCapacity,
-                            selectedColor: $selectedColor,
-                            selectedIMEIs: $selectedIMEIs,
-                            showActiveOnly: $showActiveOnly
+                    if currentStep == .imeiSelection {
+                        if !selectedBrand.isEmpty && !selectedModel.isEmpty && !selectedStorageLocation.isEmpty && !filteredDevices.isEmpty {
+                            DeviceFilteringTable(
+                                devices: $filteredDevices,
+                                selectedCapacity: $selectedCapacity,
+                                selectedColor: $selectedColor,
+                                selectedIMEIs: $selectedIMEIs,
+                                showActiveOnly: $showActiveOnly
+                            )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .padding(.horizontal, 24)
+                            .padding(.bottom, 24)
+                            .transition(.asymmetric(
+                                insertion: .opacity.combined(with: .move(edge: .trailing)),
+                                removal: .opacity.combined(with: .move(edge: .leading))
+                            ))
+                        } else {
+                            // Placeholder when no data
+                            VStack {
+                                Spacer()
+                                Text("Select brand, model, and storage location to view devices")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                    } else {
+                        // Price setting interface
+                        PriceSettingInterface(
+                            selectedDevices: selectedDevicesForPricing,
+                            deviceSellingPrices: $deviceSellingPrices,
+                            deviceProfitLoss: $deviceProfitLoss
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.horizontal, 24)
                         .padding(.bottom, 24)
-                    } else {
-                        // Placeholder when no data
-                        VStack {
-                            Spacer()
-                            Text("Select brand, model, and storage location to view devices")
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                            Spacer()
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .move(edge: .trailing)),
+                            removal: .opacity.combined(with: .move(edge: .leading))
+                        ))
                     }
                 }
             }
@@ -218,10 +264,17 @@ struct SalesAddProductDialog: View {
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Add") {
-                        addProducts()
+                    if currentStep == .imeiSelection {
+                        Button("Next") {
+                            proceedToPriceSetting()
+                        }
+                        .disabled(!isNextEnabled)
+                    } else {
+                        Button("Add") {
+                            addProducts()
+                        }
+                        .disabled(!isAddEnabled)
                     }
-                    .disabled(!isAddEnabled)
                 }
             }
             #endif
@@ -283,45 +336,80 @@ struct SalesAddProductDialog: View {
                 Divider()
                 
                 // Fixed Table Area - fills remaining space
-                if !selectedBrand.isEmpty && !selectedModel.isEmpty && !selectedStorageLocation.isEmpty && !filteredDevices.isEmpty {
-                    DeviceFilteringTable(
-                        devices: $filteredDevices,
-                        selectedCapacity: $selectedCapacity,
-                        selectedColor: $selectedColor,
-                        selectedIMEIs: $selectedIMEIs,
-                        showActiveOnly: $showActiveOnly
+                if currentStep == .imeiSelection {
+                    if !selectedBrand.isEmpty && !selectedModel.isEmpty && !selectedStorageLocation.isEmpty && !filteredDevices.isEmpty {
+                        DeviceFilteringTable(
+                            devices: $filteredDevices,
+                            selectedCapacity: $selectedCapacity,
+                            selectedColor: $selectedColor,
+                            selectedIMEIs: $selectedIMEIs,
+                            showActiveOnly: $showActiveOnly
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, 24)
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .move(edge: .trailing)),
+                            removal: .opacity.combined(with: .move(edge: .leading))
+                        ))
+                    } else {
+                        // Placeholder when no data
+                        VStack {
+                            Spacer()
+                            Text("Select brand, model, and storage location to view devices")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                } else {
+                    // Price setting interface
+                    PriceSettingInterface(
+                        selectedDevices: selectedDevicesForPricing,
+                        deviceSellingPrices: $deviceSellingPrices,
+                        deviceProfitLoss: $deviceProfitLoss
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding(.horizontal, 24)
                     .padding(.bottom, 24)
-                } else {
-                    // Placeholder when no data
-                    VStack {
-                        Spacer()
-                        Text("Select brand, model, and storage location to view devices")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                        Spacer()
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .move(edge: .trailing)),
+                        removal: .opacity.combined(with: .move(edge: .leading))
+                    ))
                 }
                 
                 Divider()
                 
                 // Footer
                 HStack {
-                    Button("Cancel") {
-                        handleCloseAction()
+                    if currentStep == .priceSetting {
+                        Button("Previous") {
+                            goBackToImeiSelection()
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    } else {
+                        Button("Cancel") {
+                            handleCloseAction()
+                        }
+                        .buttonStyle(PlainButtonStyle())
                     }
-                    .buttonStyle(PlainButtonStyle())
                     
                     Spacer()
                     
-                    Button("Add Products") {
-                        addProducts()
+                    if currentStep == .imeiSelection {
+                        Button("Next") {
+                            proceedToPriceSetting()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!isNextEnabled)
+                    } else {
+                        Button("Add Products") {
+                            addProducts()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!isAddEnabled)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!isAddEnabled)
                 }
                 .padding(.horizontal, 24)
                 .padding(.vertical, 16)
@@ -685,26 +773,54 @@ struct SalesAddProductDialog: View {
         onDismiss?()
     }
     
+    private func proceedToPriceSetting() {
+        // Get selected devices for pricing
+        selectedDevicesForPricing = filteredDevices.filter { device in
+            selectedIMEIs.contains(device.imei)
+        }
+        
+        // Initialize selling prices with empty strings
+        deviceSellingPrices.removeAll()
+        deviceProfitLoss.removeAll()
+        
+        for device in selectedDevicesForPricing {
+            deviceSellingPrices[device.imei] = ""
+            deviceProfitLoss[device.imei] = 0.0
+        }
+        
+        // Animate to price setting step
+        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+            currentStep = .priceSetting
+        }
+    }
+    
+    private func goBackToImeiSelection() {
+        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
+            currentStep = .imeiSelection
+        }
+    }
+    
     private func addProducts() {
-        // Create PhoneItem objects from selected IMEIs
+        // Create PhoneItem objects from selected devices with selling prices
         var items: [PhoneItem] = []
         
-        for imei in selectedIMEIs {
-            if let device = filteredDevices.first(where: { $0.imei == imei }) {
-                let item = PhoneItem(
-                    brand: selectedBrand,
-                    model: selectedModel,
-                    capacity: device.capacity,
-                    capacityUnit: "GB", // Default to GB
-                    color: device.color,
-                    carrier: device.carrier,
-                    status: "Active",
-                    storageLocation: selectedStorageLocation,
-                    imeis: [device.imei],
-                    unitCost: 0.0 // Price will be set in the sales view
-                )
-                items.append(item)
-            }
+        for device in selectedDevicesForPricing {
+            let sellingPriceString = deviceSellingPrices[device.imei, default: ""]
+            let sellingPrice = Double(sellingPriceString) ?? 0.0
+            
+            let item = PhoneItem(
+                brand: selectedBrand,
+                model: selectedModel,
+                capacity: device.capacity,
+                capacityUnit: device.capacityUnit,
+                color: device.color,
+                carrier: device.carrier,
+                status: "Active",
+                storageLocation: selectedStorageLocation,
+                imeis: [device.imei],
+                unitCost: sellingPrice // Use selling price as unitCost for sales
+            )
+            items.append(item)
         }
         
         onSave?(items)
@@ -3244,6 +3360,165 @@ struct SalesStorageLocationDropdownOverlay: View {
             onRenameStorageLocation(editOriginalName, trimmedNew)
         }
         showEditNameSheet = false
+    }
+}
+
+// MARK: - Price Setting Interface
+struct PriceSettingInterface: View {
+    let selectedDevices: [SalesAddProductDialog.DeviceInfo]
+    @Binding var deviceSellingPrices: [String: String]
+    @Binding var deviceProfitLoss: [String: Double]
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Header
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Set Selling Prices")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .foregroundColor(.primary)
+                
+                Text("Enter the selling price for each selected device")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            
+            // Device list with price inputs
+            ScrollView {
+                LazyVStack(spacing: 12) {
+                    ForEach(selectedDevices, id: \.imei) { device in
+                        DevicePriceRow(
+                            device: device,
+                            sellingPrice: Binding(
+                                get: { deviceSellingPrices[device.imei, default: ""] },
+                                set: { newValue in
+                                    deviceSellingPrices[device.imei] = newValue
+                                    updateProfitLoss(for: device, sellingPrice: newValue)
+                                }
+                            )
+                        )
+                    }
+                }
+                .padding(.horizontal, 20)
+            }
+            
+            Spacer()
+        }
+    }
+    
+    private func updateProfitLoss(for device: SalesAddProductDialog.DeviceInfo, sellingPrice: String) {
+        let sellingPriceValue = Double(sellingPrice) ?? 0.0
+        let profitLoss = sellingPriceValue - device.unitPrice
+        deviceProfitLoss[device.imei] = profitLoss
+    }
+}
+
+// MARK: - Device Price Row
+struct DevicePriceRow: View {
+    let device: SalesAddProductDialog.DeviceInfo
+    @Binding var sellingPrice: String
+    @FocusState private var isPriceFieldFocused: Bool
+    
+    private var profitLoss: Double {
+        let sellingPriceValue = Double(sellingPrice) ?? 0.0
+        return sellingPriceValue - device.unitPrice
+    }
+    
+    private var profitLossColor: Color {
+        if profitLoss > 0 {
+            return .green
+        } else if profitLoss < 0 {
+            return .red
+        } else {
+            return .secondary
+        }
+    }
+    
+    private var profitLossText: String {
+        if profitLoss > 0 {
+            return "+$\(String(format: "%.2f", profitLoss))"
+        } else if profitLoss < 0 {
+            return "-$\(String(format: "%.2f", abs(profitLoss)))"
+        } else {
+            return "$0.00"
+        }
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 16) {
+                // Device info
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(device.imei)
+                        .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.primary)
+                    
+                    Text("\(device.capacity) \(device.capacityUnit) • \(device.color) • \(device.carrier)")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                // Cost price
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text("Cost Price")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.secondary)
+                    
+                    Text("$\(String(format: "%.2f", device.unitPrice))")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.primary)
+                }
+                
+                // Selling price input
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text("Selling Price")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.secondary)
+                    
+                    HStack(spacing: 4) {
+                        Text("$")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.primary)
+                        
+                        TextField("0.00", text: $sellingPrice)
+                            .textFieldStyle(PlainTextFieldStyle())
+                            .font(.system(size: 14, weight: .semibold))
+                            #if os(iOS)
+                            .keyboardType(.decimalPad)
+                            #endif
+                            .focused($isPriceFieldFocused)
+                            .frame(width: 80)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+                
+                // Profit/Loss
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text("P/L")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.secondary)
+                    
+                    Text(profitLossText)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(profitLossColor)
+                }
+                .frame(width: 70)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.regularMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                    )
+            )
+        }
     }
 }
 

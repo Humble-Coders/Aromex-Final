@@ -1,96 +1,31 @@
-//
-//  InventoryFinalView.swift
-//  Aromex
-//
-//  Created by Ansh Bajaj on 29/08/25.
-//
-
 import SwiftUI
 import FirebaseFirestore
 
-#if os(iOS)
-import UIKit
-#else
-import AppKit
-#endif
-
-// MARK: - Cross-Platform Color Extension
-extension Color {
-    static var systemBackground: Color {
-        #if os(iOS)
-        return Color.systemBackground
-        #else
-        return Color(NSColor.controlBackgroundColor)
-        #endif
-    }
-    
-    static var systemGray6: Color {
-        #if os(iOS)
-        return Color.systemGray6
-        #else
-        return Color(NSColor.controlBackgroundColor)
-        #endif
-    }
-    
-    static var systemGray4: Color {
-        #if os(iOS)
-        return Color(UIColor.systemGray4)
-        #else
-        return Color(NSColor.separatorColor)
-        #endif
-    }
-}
-
 // MARK: - Data Models
-struct PhoneBrand: Identifiable, Codable {
+struct InventoryPhone: Identifiable, Hashable {
     let id: String
     let brand: String
-    let models: [PhoneModel]
-}
-
-struct PhoneModel: Identifiable, Codable {
-    let id: String
     let model: String
-    let phones: [Phone]
-}
-
-struct Phone: Identifiable, Codable {
-    let id: String
-    let imei: String
     let capacity: String
     let capacityUnit: String
     let color: String
     let carrier: String
     let status: String
     let storageLocation: String
+    let imei: String
     let unitCost: Double
     let createdAt: Date
     
-    init(from data: [String: Any]) {
-        self.id = data["id"] as? String ?? ""
-        self.imei = data["imei"] as? String ?? ""
-        self.capacity = data["capacity"] as? String ?? ""
-        self.capacityUnit = data["capacityUnit"] as? String ?? ""
-        self.color = data["color"] as? String ?? ""
-        self.carrier = data["carrier"] as? String ?? ""
-        self.status = data["status"] as? String ?? ""
-        self.storageLocation = data["storageLocation"] as? String ?? ""
-        self.unitCost = data["unitCost"] as? Double ?? 0.0
-        self.createdAt = data["createdAt"] as? Date ?? Date()
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
     }
     
-    // Computed property for grouping phones with same specs
-    var groupingKey: String {
-        return "\(capacity)\(capacityUnit)-\(color)-\(carrier)-\(status)-\(storageLocation)"
+    static func == (lhs: InventoryPhone, rhs: InventoryPhone) -> Bool {
+        lhs.id == rhs.id
     }
 }
 
-struct StorageLocation: Identifiable, Codable {
-    let id: String
-    let name: String
-}
-
-struct ClubbedPhone: Identifiable {
+struct GroupedPhone: Identifiable {
     let id = UUID()
     let brand: String
     let model: String
@@ -101,741 +36,1169 @@ struct ClubbedPhone: Identifiable {
     let status: String
     let storageLocation: String
     let unitCost: Double
-    let quantity: Int
-    let phones: [Phone]
+    let phones: [InventoryPhone]
     
-    var displayName: String {
-        return "\(brand) \(model) \(capacity)\(capacityUnit) \(color) \(carrier)"
-    }
+    var quantity: Int { phones.count }
+    var imeis: [String] { phones.map { $0.imei } }
+}
+
+struct StorageLocation: Identifiable {
+    let id: String
+    let name: String
 }
 
 // MARK: - View Model
-class InventoryViewModel: ObservableObject {
+@MainActor
+class InventoryFinalViewModel: ObservableObject {
+    @Published var allPhones: [InventoryPhone] = []
     @Published var storageLocations: [StorageLocation] = []
-    @Published var allPhones: [Phone] = []
-    @Published var phoneBrands: [PhoneBrand] = []
-    @Published var isLoading = false
-    @Published var errorMessage: String?
     @Published var selectedLocation: StorageLocation?
+    @Published var isLoading = false
     @Published var searchText = ""
     @Published var selectedBrand: String?
     @Published var selectedStatus: String?
-    @Published var selectedCapacity: String?
-    @Published var selectedColor: String?
-    @Published var selectedCarrier: String?
+    @Published var sortOption: SortOption = .brandAZ
     
-    private let db = Firestore.firestore()
+    enum SortOption: String, CaseIterable {
+        case brandAZ = "Brand (A-Z)"
+        case brandZA = "Brand (Z-A)"
+        case modelAZ = "Model (A-Z)"
+        case modelZA = "Model (Z-A)"
+        case quantityHigh = "Quantity (High-Low)"
+        case quantityLow = "Quantity (Low-High)"
+        case priceHigh = "Price (High-Low)"
+        case priceLow = "Price (Low-High)"
+    }
     
-    init() {
-        Task {
-            await fetchAllData()
+    private var db = Firestore.firestore()
+    private var referenceCache: [String: String] = [:]
+    
+    var filteredAndSortedPhones: [InventoryPhone] {
+        var phones = allPhones
+        
+        if let location = selectedLocation {
+            phones = phones.filter { $0.storageLocation == location.name }
+        }
+        
+        if !searchText.isEmpty {
+            phones = phones.filter {
+                $0.brand.localizedCaseInsensitiveContains(searchText) ||
+                $0.model.localizedCaseInsensitiveContains(searchText) ||
+                $0.imei.localizedCaseInsensitiveContains(searchText) ||
+                $0.color.localizedCaseInsensitiveContains(searchText) ||
+                $0.carrier.localizedCaseInsensitiveContains(searchText)
+            }
+        }
+        
+        if let brand = selectedBrand {
+            phones = phones.filter { $0.brand == brand }
+        }
+        
+        if let status = selectedStatus {
+            phones = phones.filter { $0.status == status }
+        }
+        
+        return phones
+    }
+    
+    var groupedPhones: [String: [GroupedPhone]] {
+        let phones = filteredAndSortedPhones
+        var grouped: [String: [GroupedPhone]] = [:]
+        
+        let brandGroups = Dictionary(grouping: phones) { $0.brand }
+        
+        for (brand, brandPhones) in brandGroups {
+            let phoneGroups = Dictionary(grouping: brandPhones) { phone in
+                "\(phone.model)|\(phone.capacity)|\(phone.capacityUnit)|\(phone.color)|\(phone.carrier)|\(phone.status)|\(phone.storageLocation)"
+            }
+            
+            var brandGroupedPhones: [GroupedPhone] = []
+            
+            for (_, groupPhones) in phoneGroups {
+                if let firstPhone = groupPhones.first {
+                    let groupedPhone = GroupedPhone(
+                        brand: firstPhone.brand,
+                        model: firstPhone.model,
+                        capacity: firstPhone.capacity,
+                        capacityUnit: firstPhone.capacityUnit,
+                        color: firstPhone.color,
+                        carrier: firstPhone.carrier,
+                        status: firstPhone.status,
+                        storageLocation: firstPhone.storageLocation,
+                        unitCost: firstPhone.unitCost,
+                        phones: groupPhones
+                    )
+                    brandGroupedPhones.append(groupedPhone)
+                }
+            }
+            
+            brandGroupedPhones = sortGroupedPhones(brandGroupedPhones)
+            grouped[brand] = brandGroupedPhones
+        }
+        
+        return grouped
+    }
+    
+    var sortedBrands: [String] {
+        let brands = Array(groupedPhones.keys)
+        switch sortOption {
+        case .brandAZ:
+            return brands.sorted()
+        case .brandZA:
+            return brands.sorted(by: >)
+        default:
+            return brands.sorted()
         }
     }
     
-    @MainActor
+    var availableBrands: [String] {
+        Array(Set(allPhones.map { $0.brand })).sorted()
+    }
+    
+    var availableStatuses: [String] {
+        Array(Set(allPhones.map { $0.status })).sorted()
+    }
+    
+    private func sortGroupedPhones(_ phones: [GroupedPhone]) -> [GroupedPhone] {
+        switch sortOption {
+        case .brandAZ, .brandZA:
+            return phones.sorted { $0.model < $1.model }
+        case .modelAZ:
+            return phones.sorted { $0.model < $1.model }
+        case .modelZA:
+            return phones.sorted { $0.model > $1.model }
+        case .quantityHigh:
+            return phones.sorted { $0.quantity > $1.quantity }
+        case .quantityLow:
+            return phones.sorted { $0.quantity < $1.quantity }
+        case .priceHigh:
+            return phones.sorted { $0.unitCost > $1.unitCost }
+        case .priceLow:
+            return phones.sorted { $0.unitCost < $1.unitCost }
+        }
+    }
+    
     func fetchAllData() async {
         isLoading = true
-        errorMessage = nil
+        referenceCache.removeAll()
         
-        do {
-            // Fetch storage locations
-            let locationsSnapshot = try await db.collection("StorageLocations").getDocuments()
-            storageLocations = locationsSnapshot.documents.compactMap { doc in
-                try? doc.data(as: StorageLocation.self)
-            }
-            
-            // Fetch all phone brands with their models and phones
-            let brandsSnapshot = try await db.collection("PhoneBrands").getDocuments()
-            var fetchedBrands: [PhoneBrand] = []
-            
-            for brandDoc in brandsSnapshot.documents {
-                guard let brandName = brandDoc.data()["brand"] as? String else { continue }
-                
-                // Fetch models for this brand
-                let modelsSnapshot = try await db.collection("PhoneBrands").document(brandDoc.documentID).collection("Models").getDocuments()
-                var fetchedModels: [PhoneModel] = []
-                
-                for modelDoc in modelsSnapshot.documents {
-                    guard let modelName = modelDoc.data()["model"] as? String else { continue }
-                    
-                    // Fetch phones for this model
-                    let phonesSnapshot = try await db.collection("PhoneBrands").document(brandDoc.documentID).collection("Models").document(modelDoc.documentID).collection("Phones").getDocuments()
-                    var fetchedPhones: [Phone] = []
-                    
-                    for phoneDoc in phonesSnapshot.documents {
-                        var phoneData = phoneDoc.data()
-                        phoneData["id"] = phoneDoc.documentID
-                        
-                        // Fetch reference data
-                        if let brandRef = phoneData["brand"] as? DocumentReference {
-                            let brandDoc = try await brandRef.getDocument()
-                            phoneData["brand"] = brandDoc.data()?["brand"] as? String ?? ""
-                        }
-                        
-                        if let modelRef = phoneData["model"] as? DocumentReference {
-                            let modelDoc = try await modelRef.getDocument()
-                            phoneData["model"] = modelDoc.data()?["model"] as? String ?? ""
-                        }
-                        
-                        if let colorRef = phoneData["color"] as? DocumentReference {
-                            let colorDoc = try await colorRef.getDocument()
-                            phoneData["color"] = colorDoc.data()?["name"] as? String ?? ""
-                        }
-                        
-                        if let carrierRef = phoneData["carrier"] as? DocumentReference {
-                            let carrierDoc = try await carrierRef.getDocument()
-                            phoneData["carrier"] = carrierDoc.data()?["name"] as? String ?? ""
-                        }
-                        
-                        if let locationRef = phoneData["storageLocation"] as? DocumentReference {
-                            let locationDoc = try await locationRef.getDocument()
-                            phoneData["storageLocation"] = locationDoc.data()?["name"] as? String ?? ""
-                        }
-                        
-                        let phone = Phone(from: phoneData)
-                        fetchedPhones.append(phone)
-                    }
-                    
-                    if !fetchedPhones.isEmpty {
-                        fetchedModels.append(PhoneModel(id: modelDoc.documentID, model: modelName, phones: fetchedPhones))
-                    }
-                }
-                
-                if !fetchedModels.isEmpty {
-                    fetchedBrands.append(PhoneBrand(id: brandDoc.documentID, brand: brandName, models: fetchedModels))
-                }
-            }
-            
-            phoneBrands = fetchedBrands
-            allPhones = fetchedBrands.flatMap { brand in
-                brand.models.flatMap { $0.phones }
-            }
-            
-        } catch {
-            errorMessage = "Failed to fetch inventory data: \(error.localizedDescription)"
-        }
+        async let locationsTask = fetchStorageLocations()
+        async let referencesTask = fetchAllReferences()
+        async let phonesTask = fetchAllPhones()
+        
+        _ = await (locationsTask, referencesTask, phonesTask)
         
         isLoading = false
     }
     
-    func getClubbedPhones(for location: StorageLocation) -> [ClubbedPhone] {
-        let locationPhones = allPhones.filter { $0.storageLocation == location.name }
-        
-        let grouped = Dictionary(grouping: locationPhones) { phone in
-            phone.groupingKey
+    private func fetchStorageLocations() async {
+        do {
+            let snapshot = try await db.collection("StorageLocations").getDocuments()
+            storageLocations = snapshot.documents.compactMap { doc in
+                guard let name = doc.data()["name"] as? String else { return nil }
+                return StorageLocation(id: doc.documentID, name: name)
+            }.sorted { $0.name < $1.name }
+        } catch {
+            print("Error fetching storage locations: \(error)")
         }
-        
-        return grouped.compactMap { (key, phones) in
-            guard let firstPhone = phones.first else { return nil }
-            
-            return ClubbedPhone(
-                brand: phoneBrands.first { brand in
-                    brand.models.contains { model in
-                        model.phones.contains { $0.id == firstPhone.id }
-                    }
-                }?.brand ?? "",
-                model: phoneBrands.first { brand in
-                    brand.models.contains { model in
-                        model.phones.contains { $0.id == firstPhone.id }
-                    }
-                }?.models.first { model in
-                    model.phones.contains { $0.id == firstPhone.id }
-                }?.model ?? "",
-                capacity: firstPhone.capacity,
-                capacityUnit: firstPhone.capacityUnit,
-                color: firstPhone.color,
-                carrier: firstPhone.carrier,
-                status: firstPhone.status,
-                storageLocation: firstPhone.storageLocation,
-                unitCost: firstPhone.unitCost,
-                quantity: phones.count,
-                phones: phones
-            )
-        }.sorted { $0.displayName < $1.displayName }
     }
     
-    var filteredClubbedPhones: [ClubbedPhone] {
-        guard let selectedLocation = selectedLocation else { return [] }
+    private func fetchAllReferences() async {
+        async let colorsTask = fetchReferenceCollection("Colors")
+        async let carriersTask = fetchReferenceCollection("Carriers")
+        async let locationsTask = fetchReferenceCollection("StorageLocations")
         
-        var clubbedPhones = getClubbedPhones(for: selectedLocation)
-        
-        // Apply search filter
-        if !searchText.isEmpty {
-            clubbedPhones = clubbedPhones.filter { phone in
-                phone.displayName.localizedCaseInsensitiveContains(searchText) ||
-                phone.status.localizedCaseInsensitiveContains(searchText) ||
-                phone.carrier.localizedCaseInsensitiveContains(searchText)
+        _ = await (colorsTask, carriersTask, locationsTask)
+    }
+    
+    private func fetchReferenceCollection(_ collection: String) async {
+        do {
+            let snapshot = try await db.collection(collection).getDocuments()
+            for doc in snapshot.documents {
+                if let name = doc.data()["name"] as? String {
+                    referenceCache[doc.documentID] = name
+                }
             }
+        } catch {
+            print("Error fetching \(collection): \(error)")
         }
-        
-        // Apply brand filter
-        if let selectedBrand = selectedBrand, !selectedBrand.isEmpty {
-            clubbedPhones = clubbedPhones.filter { $0.brand == selectedBrand }
-        }
-        
-        // Apply status filter
-        if let selectedStatus = selectedStatus, !selectedStatus.isEmpty {
-            clubbedPhones = clubbedPhones.filter { $0.status == selectedStatus }
-        }
-        
-        // Apply capacity filter
-        if let selectedCapacity = selectedCapacity, !selectedCapacity.isEmpty {
-            clubbedPhones = clubbedPhones.filter { $0.capacity == selectedCapacity }
-        }
-        
-        // Apply color filter
-        if let selectedColor = selectedColor, !selectedColor.isEmpty {
-            clubbedPhones = clubbedPhones.filter { $0.color == selectedColor }
-        }
-        
-        // Apply carrier filter
-        if let selectedCarrier = selectedCarrier, !selectedCarrier.isEmpty {
-            clubbedPhones = clubbedPhones.filter { $0.carrier == selectedCarrier }
-        }
-        
-        return clubbedPhones
     }
     
-    var availableBrands: [String] {
-        guard let selectedLocation = selectedLocation else { return [] }
-        let locationPhones = getClubbedPhones(for: selectedLocation)
-        return Array(Set(locationPhones.map { $0.brand })).sorted()
+    private func fetchAllPhones() async {
+        var phones: [InventoryPhone] = []
+        
+        do {
+            let brandsSnapshot = try await db.collection("PhoneBrands").getDocuments()
+            
+            await withTaskGroup(of: [InventoryPhone].self) { group in
+                for brandDoc in brandsSnapshot.documents {
+                    group.addTask {
+                        await self.fetchPhonesForBrand(brandDoc: brandDoc)
+                    }
+                }
+                
+                for await brandPhones in group {
+                    phones.append(contentsOf: brandPhones)
+                }
+            }
+            
+            allPhones = phones.sorted { $0.brand < $1.brand }
+        } catch {
+            print("Error fetching phones: \(error)")
+        }
     }
     
-    var availableStatuses: [String] {
-        guard let selectedLocation = selectedLocation else { return [] }
-        let locationPhones = getClubbedPhones(for: selectedLocation)
-        return Array(Set(locationPhones.map { $0.status })).sorted()
+    private func fetchPhonesForBrand(brandDoc: QueryDocumentSnapshot) async -> [InventoryPhone] {
+        var phones: [InventoryPhone] = []
+        let brandName = brandDoc.data()["brand"] as? String ?? "Unknown"
+        
+        do {
+            let modelsSnapshot = try await brandDoc.reference.collection("Models").getDocuments()
+            
+            await withTaskGroup(of: [InventoryPhone].self) { group in
+                for modelDoc in modelsSnapshot.documents {
+                    group.addTask {
+                        await self.fetchPhonesForModel(modelDoc: modelDoc, brandName: brandName)
+                    }
+                }
+                
+                for await modelPhones in group {
+                    phones.append(contentsOf: modelPhones)
+                }
+            }
+        } catch {
+            print("Error fetching models for brand \(brandName): \(error)")
+        }
+        
+        return phones
     }
     
-    var availableCapacities: [String] {
-        guard let selectedLocation = selectedLocation else { return [] }
-        let locationPhones = getClubbedPhones(for: selectedLocation)
-        return Array(Set(locationPhones.map { $0.capacity })).sorted()
+    private func fetchPhonesForModel(modelDoc: QueryDocumentSnapshot, brandName: String) async -> [InventoryPhone] {
+        var phones: [InventoryPhone] = []
+        let modelName = modelDoc.data()["model"] as? String ?? "Unknown"
+        
+        do {
+            let phonesSnapshot = try await modelDoc.reference.collection("Phones").getDocuments()
+            
+            for phoneDoc in phonesSnapshot.documents {
+                if let phone = createPhone(from: phoneDoc, brand: brandName, model: modelName) {
+                    phones.append(phone)
+                }
+            }
+        } catch {
+            print("Error fetching phones for model \(modelName): \(error)")
+        }
+        
+        return phones
     }
     
-    var availableColors: [String] {
-        guard let selectedLocation = selectedLocation else { return [] }
-        let locationPhones = getClubbedPhones(for: selectedLocation)
-        return Array(Set(locationPhones.map { $0.color })).sorted()
+    private func createPhone(from doc: QueryDocumentSnapshot, brand: String, model: String) -> InventoryPhone? {
+        let data = doc.data()
+        
+        let color = getReferenceName(from: data["color"])
+        let carrier = getReferenceName(from: data["carrier"])
+        let storageLocation = getReferenceName(from: data["storageLocation"])
+        
+        return InventoryPhone(
+            id: doc.documentID,
+            brand: brand,
+            model: model,
+            capacity: data["capacity"] as? String ?? "",
+            capacityUnit: data["capacityUnit"] as? String ?? "",
+            color: color,
+            carrier: carrier,
+            status: data["status"] as? String ?? "",
+            storageLocation: storageLocation,
+            imei: data["imei"] as? String ?? "",
+            unitCost: data["unitCost"] as? Double ?? 0.0,
+            createdAt: (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
+        )
     }
     
-    var availableCarriers: [String] {
-        guard let selectedLocation = selectedLocation else { return [] }
-        let locationPhones = getClubbedPhones(for: selectedLocation)
-        return Array(Set(locationPhones.map { $0.carrier })).sorted()
+    private func getReferenceName(from value: Any?) -> String {
+        guard let ref = value as? DocumentReference else { return "" }
+        return referenceCache[ref.documentID] ?? ""
+    }
+    
+    func clearFilters() {
+        searchText = ""
+        selectedBrand = nil
+        selectedStatus = nil
+        sortOption = .brandAZ
     }
 }
 
 // MARK: - Main View
 struct InventoryFinalView: View {
-    @StateObject private var viewModel = InventoryViewModel()
-    @State private var showingFilters = false
+    @StateObject private var viewModel = InventoryFinalViewModel()
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
+    @Environment(\.verticalSizeClass) var verticalSizeClass
+    
+    var isCompact: Bool {
+        horizontalSizeClass == .compact && verticalSizeClass == .regular
+    }
+    
+    var isIPad: Bool {
+        #if os(iOS)
+        return horizontalSizeClass == .regular && verticalSizeClass == .regular
+        #else
+        return false
+        #endif
+    }
+    
+    var isMacOS: Bool {
+        #if os(macOS)
+        return true
+        #else
+        return false
+        #endif
+    }
     
     var body: some View {
-        NavigationView {
-            Group {
-                if viewModel.isLoading {
-                    VStack(spacing: 20) {
-                        ProgressView()
-                            .scaleEffect(1.5)
-                        Text("Loading Inventory...")
-                            .font(.headline)
-                            .foregroundColor(.secondary)
+        Group {
+            if isCompact {
+                iPhoneView
+            } else if isIPad {
+                iPadView
+            } else {
+                macOSView
+            }
+        }
+        .task {
+            await viewModel.fetchAllData()
+        }
+    }
+    
+    // MARK: - iPhone View
+    private var iPhoneView: some View {
+        VStack(spacing: 0) {
+            if viewModel.isLoading {
+                loadingView
+            } else if viewModel.selectedLocation == nil {
+                locationSelectionView
+            } else {
+                inventoryContentView
+            }
+        }
+        .background(.regularMaterial)
+    }
+    
+    // MARK: - iPad View
+    private var iPadView: some View {
+        HStack(spacing: 0) {
+            if viewModel.selectedLocation == nil {
+                locationSelectionView
+            } else {
+                VStack(spacing: 0) {
+                    HStack {
+                        Button(action: {
+                            viewModel.selectedLocation = nil
+                        }) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 16, weight: .semibold))
+                                Text("Locations")
+                                    .font(.system(size: 16, weight: .semibold))
+                            }
+                            .foregroundColor(Color(red: 0.25, green: 0.33, blue: 0.54))
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 16)
+                        
+                        Spacer()
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let errorMessage = viewModel.errorMessage {
-                    VStack(spacing: 20) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .font(.system(size: 50))
-                            .foregroundColor(.red)
-                        Text("Error")
-                            .font(.title2)
-                            .fontWeight(.bold)
-                        Text(errorMessage)
-                            .multilineTextAlignment(.center)
-                            .foregroundColor(.secondary)
-                        Button("Retry") {
-                            Task {
-                                await viewModel.fetchAllData()
+                    .background(.regularMaterial)
+                    
+                    Divider()
+                    
+                    ScrollView {
+                        VStack(spacing: 4) {
+                            ForEach(viewModel.storageLocations) { location in
+                                locationCard(location: location, isCompact: false)
                             }
                         }
-                        .buttonStyle(.borderedProminent)
+                        .padding(16)
                     }
-                    .padding()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if viewModel.selectedLocation == nil {
-                    LocationSelectionView(viewModel: viewModel)
-                } else {
-                    InventoryDisplayView(viewModel: viewModel, showingFilters: $showingFilters)
                 }
+                .frame(width: 300)
+                .background(Color(red: 0.95, green: 0.95, blue: 0.97))
+                
+                Divider()
+                
+                inventoryContentView
             }
-            .navigationTitle("Inventory")
-            .toolbar {
-                #if os(iOS)
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    if viewModel.selectedLocation != nil {
+        }
+        .overlay(loadingOverlay)
+    }
+    
+    // MARK: - macOS View
+    private var macOSView: some View {
+        HStack(spacing: 0) {
+            if viewModel.selectedLocation == nil {
+                locationSelectionView
+            } else {
+                VStack(spacing: 0) {
+                    HStack {
                         Button(action: {
                             viewModel.selectedLocation = nil
                         }) {
-                            Image(systemName: "arrow.left")
+                            HStack(spacing: 8) {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 16, weight: .semibold))
+                                Text("Locations")
+                                    .font(.system(size: 16, weight: .semibold))
+                            }
+                            .foregroundColor(Color(red: 0.25, green: 0.33, blue: 0.54))
                         }
+                        .buttonStyle(PlainButtonStyle())
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 20)
+                        
+                        Spacer()
+                    }
+                    .background(.regularMaterial)
+                    
+                    Divider()
+                    
+                    ScrollView {
+                        VStack(spacing: 6) {
+                            ForEach(viewModel.storageLocations) { location in
+                                locationCard(location: location, isCompact: false)
+                            }
+                        }
+                        .padding(20)
                     }
                 }
-                #else
-                ToolbarItem(placement: .primaryAction) {
-                    if viewModel.selectedLocation != nil {
-                        Button(action: {
-                            viewModel.selectedLocation = nil
-                        }) {
-                            Image(systemName: "arrow.left")
+                .frame(width: 320)
+                .background(.regularMaterial)
+                
+                Divider()
+                
+                inventoryContentView
+            }
+        }
+        .overlay(loadingOverlay)
+    }
+    
+    // MARK: - Loading View
+    private var loadingView: some View {
+        VStack(spacing: 24) {
+            ProgressView()
+                .scaleEffect(1.5)
+                .progressViewStyle(CircularProgressViewStyle(tint: Color(red: 0.25, green: 0.33, blue: 0.54)))
+            
+            Text("Loading Inventory...")
+                .font(.system(size: 18, weight: .medium))
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    private var loadingOverlay: some View {
+        Group {
+            if viewModel.isLoading {
+                Color.black.opacity(0.3)
+                    .ignoresSafeArea()
+                    .overlay(
+                        VStack(spacing: 24) {
+                            ProgressView()
+                                .scaleEffect(1.5)
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            
+                            Text("Loading Inventory...")
+                                .font(.system(size: 18, weight: .medium))
+                                .foregroundColor(.white)
                         }
-                    }
-                }
-                #endif
+                    )
             }
         }
     }
-}
-
-// MARK: - Location Selection View
-struct LocationSelectionView: View {
-    @ObservedObject var viewModel: InventoryViewModel
     
-    var body: some View {
-        ScrollView {
-            LazyVGrid(columns: [
-                GridItem(.adaptive(minimum: 200), spacing: 16)
-            ], spacing: 16) {
-                ForEach(viewModel.storageLocations) { location in
-                    LocationCard(location: location) {
-                        viewModel.selectedLocation = location
+    // MARK: - Location Selection View
+    private var locationSelectionView: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Storage Locations")
+                        .font(.system(size: isCompact ? 24 : 28, weight: .bold, design: .rounded))
+                        .foregroundColor(.primary)
+                    
+                    Text("\(viewModel.storageLocations.count) locations • \(viewModel.allPhones.count) total devices")
+                        .font(.system(size: isCompact ? 14 : 16, weight: .medium))
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+            }
+            .padding(.horizontal, isCompact ? 20 : 32)
+            .padding(.top, isCompact ? 20 : 32)
+            .padding(.bottom, isCompact ? 16 : 24)
+            
+            Divider()
+            
+            ScrollView {
+                LazyVGrid(
+                    columns: gridColumns,
+                    spacing: isCompact ? 12 : 16
+                ) {
+                    ForEach(viewModel.storageLocations) { location in
+                        locationCard(location: location, isCompact: isCompact)
+                    }
+                }
+                .padding(isCompact ? 16 : 24)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    private var gridColumns: [GridItem] {
+        if isCompact {
+            return [GridItem(.flexible())]
+        } else if isIPad {
+            return [GridItem(.flexible()), GridItem(.flexible())]
+        } else {
+            return [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+        }
+    }
+    
+    private func locationCard(location: StorageLocation, isCompact: Bool) -> some View {
+        let phonesInLocation = viewModel.allPhones.filter { $0.storageLocation == location.name }
+        let isSelected = viewModel.selectedLocation?.id == location.id
+        
+        return Button(action: {
+            withAnimation {
+                viewModel.selectedLocation = location
+            }
+        }) {
+            VStack(alignment: .leading, spacing: isCompact ? 12 : 16) {
+                HStack {
+                    Image(systemName: "location.fill")
+                        .font(.system(size: isCompact ? 24 : 28, weight: .semibold))
+                        .foregroundColor(Color(red: 0.25, green: 0.33, blue: 0.54))
+                    
+                    Spacer()
+                    
+                    if isSelected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 20))
+                            .foregroundColor(.green)
+                    }
+                }
+                
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(location.name)
+                        .font(.system(size: isCompact ? 18 : 20, weight: .bold))
+                        .foregroundColor(.primary)
+                        .lineLimit(2)
+                    
+                    HStack(spacing: 8) {
+                        Image(systemName: "iphone")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.secondary)
+                        
+                        Text("\(phonesInLocation.count) devices")
+                            .font(.system(size: isCompact ? 14 : 15, weight: .medium))
+                            .foregroundColor(.secondary)
                     }
                 }
             }
-            .padding()
-        }
-    }
-}
-
-struct LocationCard: View {
-    let location: StorageLocation
-    let onTap: () -> Void
-    
-    var body: some View {
-        Button(action: onTap) {
-            VStack(spacing: 12) {
-                Image(systemName: "building.2")
-                    .font(.system(size: 40))
-                    .foregroundColor(.blue)
-                
-                Text(location.name)
-                    .font(.headline)
-                    .fontWeight(.semibold)
-                    .multilineTextAlignment(.center)
-                
-                Text("Tap to view inventory")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            .frame(maxWidth: .infinity)
-            .padding()
+            .padding(isCompact ? 16 : 20)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.systemBackground)
-                    .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(isSelected ? Color(red: 0.25, green: 0.33, blue: 0.54).opacity(0.1) : Color(red: 1, green: 1, blue: 1))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(isSelected ? Color(red: 0.25, green: 0.33, blue: 0.54) : Color.secondary.opacity(0.2), lineWidth: isSelected ? 2 : 1)
+                    )
+                    .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
             )
         }
         .buttonStyle(PlainButtonStyle())
     }
-}
-
-// MARK: - Inventory Display View
-struct InventoryDisplayView: View {
-    @ObservedObject var viewModel: InventoryViewModel
-    @Binding var showingFilters: Bool
     
-    var body: some View {
+    // MARK: - Inventory Content View
+    private var inventoryContentView: some View {
         VStack(spacing: 0) {
-            // Header
-            VStack(spacing: 12) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(viewModel.selectedLocation?.name ?? "")
-                            .font(.title2)
-                            .fontWeight(.bold)
-                        
-                        Text("\(viewModel.filteredClubbedPhones.count) unique devices")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
+            inventoryHeader
+            Divider()
+            
+            if viewModel.filteredAndSortedPhones.isEmpty {
+                emptyStateView
+            } else {
+                inventoryListView
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    private var inventoryHeader: some View {
+        VStack(spacing: isCompact ? 12 : 16) {
+            HStack {
+                if isCompact {
+                    Button(action: {
+                        viewModel.selectedLocation = nil
+                    }) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 16, weight: .semibold))
+                            Text("Locations")
+                                .font(.system(size: 16, weight: .semibold))
+                        }
+                        .foregroundColor(Color(red: 0.25, green: 0.33, blue: 0.54))
                     }
-                    
-                    Spacer()
-                    
-                    Button(action: { showingFilters.toggle() }) {
-                        Image(systemName: showingFilters ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
-                            .font(.title2)
-                    }
+                    .buttonStyle(PlainButtonStyle())
                 }
                 
-                // Search Bar
-                HStack {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(viewModel.selectedLocation?.name ?? "")
+                        .font(.system(size: isCompact ? 22 : 26, weight: .bold, design: .rounded))
+                        .foregroundColor(.primary)
                     
-                    TextField("Search devices...", text: $viewModel.searchText)
-                        .textFieldStyle(PlainTextFieldStyle())
+                    Text("\(viewModel.filteredAndSortedPhones.count) devices")
+                        .font(.system(size: isCompact ? 14 : 16, weight: .medium))
+                        .foregroundColor(.secondary)
                 }
-                .padding(.horizontal, 12)
+                
+                Spacer()
+            }
+            
+            if isCompact {
+                iPhoneFilters
+            } else {
+                desktopFilters
+            }
+        }
+        .padding(.horizontal, isCompact ? 16 : 24)
+        .padding(.vertical, isCompact ? 16 : 20)
+        .background(.regularMaterial)
+    }
+    
+    private var iPhoneFilters: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.secondary)
+                
+                TextField("Search devices...", text: $viewModel.searchText)
+                    .textFieldStyle(PlainTextFieldStyle())
+                    .font(.body)
+                
+                if !viewModel.searchText.isEmpty {
+                    Button(action: {
+                        viewModel.searchText = ""
+                    }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.secondary.opacity(0.1))
+            )
+            
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    Menu {
+                        Button("All Brands") {
+                            viewModel.selectedBrand = nil
+                        }
+                        Divider()
+                        ForEach(viewModel.availableBrands, id: \.self) { brand in
+                            Button(brand) {
+                                viewModel.selectedBrand = brand
+                            }
+                        }
+                    } label: {
+                        filterChip(
+                            title: viewModel.selectedBrand ?? "Brand",
+                            icon: "iphone",
+                            isActive: viewModel.selectedBrand != nil
+                        )
+                    }
+                    
+                    Menu {
+                        Button("All Statuses") {
+                            viewModel.selectedStatus = nil
+                        }
+                        Divider()
+                        ForEach(viewModel.availableStatuses, id: \.self) { status in
+                            Button(status) {
+                                viewModel.selectedStatus = status
+                            }
+                        }
+                    } label: {
+                        filterChip(
+                            title: viewModel.selectedStatus ?? "Status",
+                            icon: "checkmark.circle",
+                            isActive: viewModel.selectedStatus != nil
+                        )
+                    }
+                    
+                    Menu {
+                        ForEach(InventoryFinalViewModel.SortOption.allCases, id: \.self) { option in
+                            Button(option.rawValue) {
+                                viewModel.sortOption = option
+                            }
+                        }
+                    } label: {
+                        filterChip(
+                            title: "Sort",
+                            icon: "arrow.up.arrow.down",
+                            isActive: viewModel.sortOption != .brandAZ
+                        )
+                    }
+                    
+                    if viewModel.selectedBrand != nil || viewModel.selectedStatus != nil {
+                        Button(action: {
+                            viewModel.clearFilters()
+                        }) {
+                            filterChip(
+                                title: "Clear",
+                                icon: "xmark",
+                                isActive: false
+                            )
+                            .foregroundColor(.red)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
+                }
+            }
+        }
+    }
+    
+    private var desktopFilters: some View {
+        HStack(spacing: 16) {
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.secondary)
+                
+                TextField("Search devices...", text: $viewModel.searchText)
+                    .textFieldStyle(PlainTextFieldStyle())
+                    .font(.body)
+                
+                if !viewModel.searchText.isEmpty {
+                    Button(action: {
+                        viewModel.searchText = ""
+                    }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .frame(width: 300)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.secondary.opacity(0.1))
+            )
+            
+            Menu {
+                Button("All Brands") {
+                    viewModel.selectedBrand = nil
+                }
+                Divider()
+                ForEach(viewModel.availableBrands, id: \.self) { brand in
+                    Button(brand) {
+                        viewModel.selectedBrand = brand
+                    }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "iphone")
+                    Text(viewModel.selectedBrand ?? "All Brands")
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10))
+                }
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(viewModel.selectedBrand != nil ? .white : .primary)
+                .padding(.horizontal, 16)
                 .padding(.vertical, 8)
                 .background(
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.systemGray6)
+                        .fill(Color.secondary.opacity(0.1))
                 )
             }
-            .padding()
-            .background(Color.systemBackground)
-            
-            // Filters
-            if showingFilters {
-                FilterView(viewModel: viewModel)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
-            
-            // Inventory List
-            ScrollView {
-                LazyVStack(spacing: 12) {
-                    ForEach(viewModel.filteredClubbedPhones) { clubbedPhone in
-                        ClubbedPhoneCard(phone: clubbedPhone)
-                    }
-                }
-                .padding()
-            }
-        }
-        .animation(.easeInOut(duration: 0.3), value: showingFilters)
-    }
-}
-
-// MARK: - Filter View
-struct FilterView: View {
-    @ObservedObject var viewModel: InventoryViewModel
-    
-    var body: some View {
-        VStack(spacing: 16) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
-                    FilterChip(
-                        title: "Brand",
-                        options: viewModel.availableBrands,
-                        selected: $viewModel.selectedBrand
-                    )
-                    
-                    FilterChip(
-                        title: "Status",
-                        options: viewModel.availableStatuses,
-                        selected: $viewModel.selectedStatus
-                    )
-                    
-                    FilterChip(
-                        title: "Capacity",
-                        options: viewModel.availableCapacities,
-                        selected: $viewModel.selectedCapacity
-                    )
-                    
-                    FilterChip(
-                        title: "Color",
-                        options: viewModel.availableColors,
-                        selected: $viewModel.selectedColor
-                    )
-                    
-                    FilterChip(
-                        title: "Carrier",
-                        options: viewModel.availableCarriers,
-                        selected: $viewModel.selectedCarrier
-                    )
-                }
-                .padding(.horizontal)
-            }
-            
-            // Clear Filters Button
-            HStack {
-                Spacer()
-                Button("Clear All Filters") {
-                    viewModel.selectedBrand = nil
-                    viewModel.selectedStatus = nil
-                    viewModel.selectedCapacity = nil
-                    viewModel.selectedColor = nil
-                    viewModel.selectedCarrier = nil
-                }
-                .font(.caption)
-                .foregroundColor(.blue)
-            }
-            .padding(.horizontal)
-        }
-        .padding(.vertical)
-        .background(Color.systemGray6)
-    }
-}
-
-struct FilterChip: View {
-    let title: String
-    let options: [String]
-    @Binding var selected: String?
-    @State private var showingDropdown = false
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .fontWeight(.medium)
-                .foregroundColor(.secondary)
-            
-            Button(action: { showingDropdown.toggle() }) {
-                HStack {
-                    Text(selected ?? "All")
-                        .font(.subheadline)
-                        .foregroundColor(selected != nil ? .primary : .secondary)
-                    
-                    Image(systemName: "chevron.down")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(Color.systemBackground)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(Color.systemGray4, lineWidth: 1)
-                        )
-                )
-            }
-            .buttonStyle(PlainButtonStyle())
-        }
-        .popover(isPresented: $showingDropdown) {
-            VStack(alignment: .leading, spacing: 8) {
-                Button("All") {
-                    selected = nil
-                    showingDropdown = false
-                }
-                .foregroundColor(.primary)
-                
-                ForEach(options, id: \.self) { option in
-                    Button(option) {
-                        selected = option
-                        showingDropdown = false
-                    }
-                    .foregroundColor(.primary)
-                }
-            }
-            .padding()
-            .frame(width: 150)
-        }
-    }
-}
-
-// MARK: - Clubbed Phone Card
-struct ClubbedPhoneCard: View {
-    let phone: ClubbedPhone
-    @State private var showingDetails = false
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(phone.displayName)
-                        .font(.headline)
-                        .fontWeight(.semibold)
-                    
-                    Text("\(phone.quantity) units")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-                
-                Spacer()
-                
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text("₹\(Int(phone.unitCost))")
-                        .font(.headline)
-                        .fontWeight(.bold)
-                        .foregroundColor(.green)
-                    
-                    Text("per unit")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-            
-            HStack(spacing: 16) {
-                InfoBadge(icon: "checkmark.circle", text: phone.status, color: .green)
-                InfoBadge(icon: "antenna.radiowaves.left.and.right", text: phone.carrier, color: .blue)
-                InfoBadge(icon: "paintbrush", text: phone.color, color: .purple)
-                
-                Spacer()
-                
-                Button("Details") {
-                    showingDetails = true
-                }
-                .font(.caption)
-                .foregroundColor(.blue)
-            }
-        }
-        .padding()
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color.systemBackground)
-                .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
-        )
-        .sheet(isPresented: $showingDetails) {
-            PhoneDetailsView(phone: phone)
-        }
-    }
-}
-
-struct InfoBadge: View {
-    let icon: String
-    let text: String
-    let color: Color
-    
-    var body: some View {
-        HStack(spacing: 4) {
-            Image(systemName: icon)
-                .font(.caption)
-            Text(text)
-                .font(.caption)
-        }
-        .foregroundColor(color)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(color.opacity(0.1))
-        )
-    }
-}
-
-// MARK: - Phone Details View
-struct PhoneDetailsView: View {
-    let phone: ClubbedPhone
-    @Environment(\.dismiss) private var dismiss
-    
-    var body: some View {
-        NavigationView {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    // Header
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(phone.displayName)
-                            .font(.title2)
-                            .fontWeight(.bold)
-                        
-                        Text("\(phone.quantity) units in stock")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    // Specifications
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Specifications")
-                            .font(.headline)
-                            .fontWeight(.semibold)
-                        
-                        VStack(spacing: 8) {
-                            DetailRow(title: "Brand", value: phone.brand)
-                            DetailRow(title: "Model", value: phone.model)
-                            DetailRow(title: "Capacity", value: "\(phone.capacity) \(phone.capacityUnit)")
-                            DetailRow(title: "Color", value: phone.color)
-                            DetailRow(title: "Carrier", value: phone.carrier)
-                            DetailRow(title: "Status", value: phone.status)
-                            DetailRow(title: "Location", value: phone.storageLocation)
-                            DetailRow(title: "Unit Cost", value: "₹\(Int(phone.unitCost))")
-                        }
-                    }
-                    
-                    // Individual Phones
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Individual Units")
-                            .font(.headline)
-                            .fontWeight(.semibold)
-                        
-                        ForEach(phone.phones) { individualPhone in
-                            IndividualPhoneRow(phone: individualPhone)
-                        }
-                    }
-                }
-                .padding()
-            }
-            .navigationTitle("Device Details")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                #if os(iOS)
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                }
-                #else
-                ToolbarItem(placement: .primaryAction) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                }
-                #endif
-            }
-        }
-    }
-}
-
-struct DetailRow: View {
-    let title: String
-    let value: String
-    
-    var body: some View {
-        HStack {
-            Text(title)
-                .font(.subheadline)
-                .foregroundColor(.secondary)
             
             Spacer()
             
-            Text(value)
-                .font(.subheadline)
-                .fontWeight(.medium)
+            if viewModel.selectedBrand != nil || viewModel.selectedStatus != nil || viewModel.sortOption != .brandAZ {
+                Button(action: {
+                    viewModel.clearFilters()
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "xmark.circle")
+                        Text("Clear Filters")
+                    }
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.red)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.red.opacity(0.1))
+                    )
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
         }
-        .padding(.vertical, 2)
     }
-}
-
-struct IndividualPhoneRow: View {
-    let phone: Phone
     
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("IMEI: \(phone.imei)")
-                    .font(.subheadline)
-                    .fontWeight(.medium)
+    private func filterChip(title: String, icon: String, isActive: Bool) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .medium))
+            Text(title)
+                .font(.system(size: 14, weight: .medium))
+            Image(systemName: "chevron.down")
+                .font(.system(size: 10))
+        }
+        .foregroundColor(isActive ? .white : .primary)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isActive ? Color(red: 0.25, green: 0.33, blue: 0.54) : Color.secondary.opacity(0.1))
+        )
+    }
+    
+    // MARK: - Empty State
+    private var emptyStateView: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 60, weight: .light))
+                .foregroundColor(.secondary)
+            
+            VStack(spacing: 8) {
+                Text("No Devices Found")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundColor(.primary)
                 
-                Text("Added: \(phone.createdAt.formatted(date: .abbreviated, time: .omitted))")
-                    .font(.caption)
+                Text("Try adjusting your filters or search terms")
+                    .font(.system(size: 16, weight: .regular))
                     .foregroundColor(.secondary)
             }
             
+            if viewModel.selectedBrand != nil || viewModel.selectedStatus != nil || !viewModel.searchText.isEmpty {
+                Button(action: {
+                    viewModel.clearFilters()
+                }) {
+                    Text("Clear All Filters")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(Color(red: 0.25, green: 0.33, blue: 0.54))
+                        )
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    // MARK: - Inventory List
+    private var inventoryListView: some View {
+        ScrollView {
+            LazyVStack(spacing: isCompact ? 16 : 20) {
+                ForEach(viewModel.sortedBrands, id: \.self) { brand in
+                    brandSection(brand: brand)
+                }
+            }
+            .padding(isCompact ? 16 : 24)
+        }
+    }
+    
+    private func brandSection(brand: String) -> some View {
+        VStack(alignment: .leading, spacing: isCompact ? 12 : 16) {
+            HStack {
+                Text(brand)
+                    .font(.system(size: isCompact ? 20 : 24, weight: .bold, design: .rounded))
+                    .foregroundColor(.primary)
+                
+                Spacer()
+                
+                let brandPhones = viewModel.groupedPhones[brand] ?? []
+                let totalQuantity = brandPhones.reduce(0) { $0 + $1.quantity }
+                
+                Text("\(totalQuantity) devices")
+                    .font(.system(size: isCompact ? 14 : 16, weight: .medium))
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, isCompact ? 16 : 20)
+            .padding(.vertical, isCompact ? 12 : 16)
+            .background(
+                Rectangle()
+                    .fill(Color(red: 0.25, green: 0.33, blue: 0.54).opacity(0.1))
+            )
+            
+            if let phones = viewModel.groupedPhones[brand] {
+                ForEach(phones) { groupedPhone in
+                    if isCompact {
+                        compactPhoneCard(groupedPhone: groupedPhone)
+                    } else {
+                        desktopPhoneCard(groupedPhone: groupedPhone)
+                    }
+                }
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(.background)
+                .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
+        )
+    }
+    
+    // MARK: - Compact Phone Card (iPhone)
+    private func compactPhoneCard(groupedPhone: GroupedPhone) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(groupedPhone.model)
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundColor(.primary)
+                    
+                    HStack(spacing: 6) {
+                        Text("\(groupedPhone.capacity) \(groupedPhone.capacityUnit)")
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundColor(.secondary)
+                        
+                        Text("•")
+                            .foregroundColor(.secondary)
+                        
+                        Text(groupedPhone.color)
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                Spacer()
+                
+                VStack(alignment: .trailing, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "cube.box.fill")
+                            .font(.system(size: 14, weight: .semibold))
+                        Text("×\(groupedPhone.quantity)")
+                            .font(.system(size: 16, weight: .bold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color(red: 0.25, green: 0.33, blue: 0.54))
+                    )
+                    
+                    statusBadge(text: groupedPhone.status)
+                }
+            }
+            
+            Divider()
+            
+            VStack(alignment: .leading, spacing: 10) {
+                if !groupedPhone.carrier.isEmpty {
+                    detailRow(icon: "antenna.radiowaves.left.and.right", text: groupedPhone.carrier)
+                }
+                
+                detailRow(icon: "dollarsign.circle", text: String(format: "$%.2f", groupedPhone.unitCost))
+            }
+            
+            if groupedPhone.quantity > 0 {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("IMEI Numbers")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .textCase(.uppercase)
+                        .tracking(0.5)
+                    
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(groupedPhone.imeis.prefix(3), id: \.self) { imei in
+                            Text(imei)
+                                .font(.system(size: 14, weight: .regular, design: .monospaced))
+                                .foregroundColor(.primary)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(Color.secondary.opacity(0.08))
+                                )
+                        }
+                        
+                        if groupedPhone.imeis.count > 3 {
+                            Text("+ \(groupedPhone.imeis.count - 3) more")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(.secondary)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                        }
+                    }
+                }
+                .padding(.top, 4)
+            }
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(.regularMaterial)
+                .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+        )
+        .padding(.horizontal, 12)
+    }
+    
+    // MARK: - Desktop Phone Card (iPad/macOS)
+    private func desktopPhoneCard(groupedPhone: GroupedPhone) -> some View {
+        HStack(alignment: .top, spacing: 20) {
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(groupedPhone.model)
+                        .font(.system(size: 19, weight: .bold))
+                        .foregroundColor(.primary)
+                    
+                    HStack(spacing: 12) {
+                        specBadge(icon: "internaldrive", text: "\(groupedPhone.capacity) \(groupedPhone.capacityUnit)")
+                        specBadge(icon: "paintpalette", text: groupedPhone.color)
+                        if !groupedPhone.carrier.isEmpty {
+                            specBadge(icon: "antenna.radiowaves.left.and.right", text: groupedPhone.carrier)
+                        }
+                    }
+                }
+                
+                HStack(spacing: 8) {
+                    Image(systemName: "dollarsign.circle.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(Color(red: 0.25, green: 0.33, blue: 0.54))
+                    
+                    Text(String(format: "$%.2f", groupedPhone.unitCost))
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundColor(.primary)
+                }
+            }
+            
             Spacer()
             
-            Text("₹\(Int(phone.unitCost))")
-                .font(.subheadline)
-                .fontWeight(.semibold)
-                .foregroundColor(.green)
+            if groupedPhone.quantity > 0 {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("IMEI Numbers")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .textCase(.uppercase)
+                        .tracking(0.5)
+                    
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(groupedPhone.imeis.prefix(5), id: \.self) { imei in
+                                Text(imei)
+                                    .font(.system(size: 13, weight: .regular, design: .monospaced))
+                                    .foregroundColor(.primary)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .fill(Color.secondary.opacity(0.08))
+                                    )
+                            }
+                            
+                            if groupedPhone.imeis.count > 5 {
+                                Text("+ \(groupedPhone.imeis.count - 5) more")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(.secondary)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 150)
+                }
+                .frame(width: 200)
+            }
+            
+            VStack(spacing: 12) {
+                VStack(spacing: 8) {
+                    Image(systemName: "cube.box.fill")
+                        .font(.system(size: 32, weight: .semibold))
+                        .foregroundColor(Color(red: 0.25, green: 0.33, blue: 0.54))
+                    
+                    Text("\(groupedPhone.quantity)")
+                        .font(.system(size: 28, weight: .bold, design: .rounded))
+                        .foregroundColor(.primary)
+                    
+                    Text("in stock")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.secondary)
+                }
+                .padding(16)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color(red: 0.25, green: 0.33, blue: 0.54).opacity(0.1))
+                )
+                
+                statusBadge(text: groupedPhone.status)
+            }
         }
-        .padding()
+        .padding(20)
         .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.systemGray6)
+            RoundedRectangle(cornerRadius: 12)
+                .fill(.regularMaterial)
+                .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
         )
+        .padding(.horizontal, 16)
+    }
+    
+    // MARK: - Helper Views
+    private func detailRow(icon: String, text: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(.secondary)
+                .frame(width: 20)
+            
+            Text(text)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundColor(.primary)
+        }
+    }
+    
+    private func specBadge(icon: String, text: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.secondary)
+            
+            Text(text)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(.primary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.secondary.opacity(0.1))
+        )
+    }
+    
+    private func statusBadge(text: String) -> some View {
+        let isActive = text.lowercased() == "active"
+        let tintColor = isActive ? Color.green : Color.red
+        
+        return Text(text)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundColor(tintColor)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(tintColor.opacity(0.12))
+            )
     }
 }
 

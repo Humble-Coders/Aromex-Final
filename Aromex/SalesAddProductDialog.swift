@@ -59,6 +59,7 @@ struct SalesAddProductDialog: View {
     @State private var showActiveOnly: Bool = true
     @State private var filteredDevices: [DeviceInfo] = []
     @State private var allDevices: [DeviceInfo] = []
+    @State private var isLoadingDevices = false
     
     // Loading and confirmation states
     @State private var showingConfirmation = false
@@ -211,21 +212,46 @@ struct SalesAddProductDialog: View {
                     
                     // Fixed Table Area - fills remaining space
                     if currentStep == .imeiSelection {
-                        if !selectedBrand.isEmpty && !selectedModel.isEmpty && !selectedStorageLocation.isEmpty && !filteredDevices.isEmpty {
-                            DeviceFilteringTable(
-                                devices: $filteredDevices,
-                                selectedCapacity: $selectedCapacity,
-                                selectedColor: $selectedColor,
-                                selectedIMEIs: $selectedIMEIs,
-                                showActiveOnly: $showActiveOnly
-                            )
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .padding(.horizontal, 24)
-                            .padding(.bottom, 24)
-                            .transition(.asymmetric(
-                                insertion: .opacity.combined(with: .move(edge: .trailing)),
-                                removal: .opacity.combined(with: .move(edge: .leading))
-                            ))
+                        if !selectedBrand.isEmpty && !selectedModel.isEmpty && !selectedStorageLocation.isEmpty {
+                            if isLoadingDevices {
+                                // Loading indicator
+                                VStack {
+                                    Spacer()
+                                    ProgressView()
+                                        .scaleEffect(1.5)
+                                        .padding(.bottom, 12)
+                                    Text("Loading devices...")
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                    Spacer()
+                                }
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            } else if !filteredDevices.isEmpty {
+                                DeviceFilteringTable(
+                                    devices: $filteredDevices,
+                                    selectedCapacity: $selectedCapacity,
+                                    selectedColor: $selectedColor,
+                                    selectedIMEIs: $selectedIMEIs,
+                                    showActiveOnly: $showActiveOnly
+                                )
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .padding(.horizontal, 24)
+                                .padding(.bottom, 24)
+                                .transition(.asymmetric(
+                                    insertion: .opacity.combined(with: .move(edge: .trailing)),
+                                    removal: .opacity.combined(with: .move(edge: .leading))
+                                ))
+                            } else {
+                                // No devices found
+                                VStack {
+                                    Spacer()
+                                    Text("No devices found")
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                    Spacer()
+                                }
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            }
                         } else {
                             // Placeholder when no data
                             VStack {
@@ -337,21 +363,46 @@ struct SalesAddProductDialog: View {
                 
                 // Fixed Table Area - fills remaining space
                 if currentStep == .imeiSelection {
-                    if !selectedBrand.isEmpty && !selectedModel.isEmpty && !selectedStorageLocation.isEmpty && !filteredDevices.isEmpty {
-                        DeviceFilteringTable(
-                            devices: $filteredDevices,
-                            selectedCapacity: $selectedCapacity,
-                            selectedColor: $selectedColor,
-                            selectedIMEIs: $selectedIMEIs,
-                            showActiveOnly: $showActiveOnly
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.horizontal, 24)
-                        .padding(.bottom, 24)
-                        .transition(.asymmetric(
-                            insertion: .opacity.combined(with: .move(edge: .trailing)),
-                            removal: .opacity.combined(with: .move(edge: .leading))
-                        ))
+                    if !selectedBrand.isEmpty && !selectedModel.isEmpty && !selectedStorageLocation.isEmpty {
+                        if isLoadingDevices {
+                            // Loading indicator
+                            VStack {
+                                Spacer()
+                                ProgressView()
+                                    .scaleEffect(1.5)
+                                    .padding(.bottom, 12)
+                                Text("Loading devices...")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else if !filteredDevices.isEmpty {
+                            DeviceFilteringTable(
+                                devices: $filteredDevices,
+                                selectedCapacity: $selectedCapacity,
+                                selectedColor: $selectedColor,
+                                selectedIMEIs: $selectedIMEIs,
+                                showActiveOnly: $showActiveOnly
+                            )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .padding(.horizontal, 24)
+                            .padding(.bottom, 24)
+                            .transition(.asymmetric(
+                                insertion: .opacity.combined(with: .move(edge: .trailing)),
+                                removal: .opacity.combined(with: .move(edge: .leading))
+                            ))
+                        } else {
+                            // No devices found
+                            VStack {
+                                Spacer()
+                                Text("No devices found")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
                     } else {
                         // Placeholder when no data
                         VStack {
@@ -815,7 +866,7 @@ struct SalesAddProductDialog: View {
                 capacityUnit: device.capacityUnit,
                 color: device.color,
                 carrier: device.carrier,
-                status: "Active",
+                status: device.status, // Use actual device status from database
                 storageLocation: selectedStorageLocation,
                 imeis: [device.imei],
                 unitCost: sellingPrice // Use selling price as unitCost for sales
@@ -1255,6 +1306,8 @@ struct SalesAddProductDialog: View {
                     self.selectedCapacity = ""
                     self.selectedColor = ""
                     self.selectedIMEIs.removeAll()
+                    
+                    self.isLoadingDevices = false
             
             print("loadDevices: Created \(self.allDevices.count) devices with resolved names")
         }
@@ -1264,9 +1317,11 @@ struct SalesAddProductDialog: View {
         guard !selectedBrand.isEmpty && !selectedModel.isEmpty && !selectedStorageLocation.isEmpty else {
             allDevices = []
             filteredDevices = []
+            isLoadingDevices = false
             return
         }
         
+        isLoadingDevices = true
         print("loadDevices: Starting load for brand: \(selectedBrand), model: \(selectedModel), storage: \(selectedStorageLocation)")
         
         // Convert storage location name back to ID for filtering
@@ -1274,6 +1329,7 @@ struct SalesAddProductDialog: View {
             print("loadDevices: Could not find storage location ID for name: \(selectedStorageLocation)")
             allDevices = []
             filteredDevices = []
+            isLoadingDevices = false
             return
         }
         
@@ -1289,6 +1345,7 @@ struct SalesAddProductDialog: View {
                     print("loadDevices: No brand document ID found for \(brandName)")
                     self.allDevices = []
                     self.filteredDevices = []
+                    self.isLoadingDevices = false
                     return
                 }
                 print("loadDevices: Got brand document ID: \(brandDocId)")
@@ -1305,6 +1362,7 @@ struct SalesAddProductDialog: View {
                                 print("loadDevices: No model document found for \(modelName)")
                                 self.allDevices = []
                                 self.filteredDevices = []
+                                self.isLoadingDevices = false
                         return
                     }
                             print("loadDevices: Got model document ID: \(modelDocId)")
@@ -1319,6 +1377,7 @@ struct SalesAddProductDialog: View {
                                     DispatchQueue.main.async {
                                         if let phonesError = phonesError {
                                             print("Error loading devices: \(phonesError)")
+                                            self.isLoadingDevices = false
                                             return
                                         }
                                         
@@ -1326,6 +1385,7 @@ struct SalesAddProductDialog: View {
                                             print("No phones found for brand \(self.selectedBrand) and model \(self.selectedModel)")
                                             self.allDevices = []
                                             self.filteredDevices = []
+                                            self.isLoadingDevices = false
                                             return
                                         }
                                         
@@ -3368,6 +3428,9 @@ struct PriceSettingInterface: View {
     let selectedDevices: [SalesAddProductDialog.DeviceInfo]
     @Binding var deviceSellingPrices: [String: String]
     @Binding var deviceProfitLoss: [String: Double]
+    @State private var useCommonPrice: Bool = false
+    @State private var commonPrice: String = ""
+    @FocusState private var isCommonPriceFieldFocused: Bool
     
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -3378,9 +3441,75 @@ struct PriceSettingInterface: View {
                     .fontWeight(.bold)
                     .foregroundColor(.primary)
                 
-                Text("Enter the selling price for each selected device")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
+                // Subtitle with common price toggle
+                HStack(spacing: 12) {
+                    Text("Enter the selling price for each selected device")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    
+                    Spacer()
+                    
+                    // Common price toggle
+                    Button(action: {
+                        useCommonPrice.toggle()
+                        if !useCommonPrice {
+                            // Clear all prices when disabling
+                            commonPrice = ""
+                            for device in selectedDevices {
+                                deviceSellingPrices[device.imei] = ""
+                                deviceProfitLoss[device.imei] = 0.0
+                            }
+                        } else if !commonPrice.isEmpty {
+                            // Apply common price to all
+                            applyCommonPriceToAll()
+                        }
+                    }) {
+                        HStack(spacing: 8) {
+                            Image(systemName: useCommonPrice ? "checkmark.square.fill" : "square")
+                                .foregroundColor(useCommonPrice ? .blue : .secondary)
+                                .font(.system(size: 18))
+                            
+                            Text("Use common selling price for all items")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(.primary)
+                        }
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    
+                    HStack(spacing: 4) {
+                        Text("$")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.primary)
+                            .opacity(useCommonPrice ? 1.0 : 0.5)
+                        
+                        TextField("0.00", text: $commonPrice)
+                            .textFieldStyle(PlainTextFieldStyle())
+                            .font(.system(size: 14, weight: .semibold))
+                            #if os(iOS)
+                            .keyboardType(.decimalPad)
+                            #endif
+                            .focused($isCommonPriceFieldFocused)
+                            .frame(width: 100)
+                            .multilineTextAlignment(.trailing)
+                            .disabled(!useCommonPrice)
+                            .onChange(of: commonPrice) { newValue in
+                                if useCommonPrice {
+                                    applyCommonPriceToAll()
+                                }
+                            }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(.regularMaterial)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                            )
+                    )
+                    .opacity(useCommonPrice ? 1.0 : 0.5)
+                }
             }
             .padding(.horizontal, 20)
             .padding(.top, 16)
@@ -3394,10 +3523,13 @@ struct PriceSettingInterface: View {
                             sellingPrice: Binding(
                                 get: { deviceSellingPrices[device.imei, default: ""] },
                                 set: { newValue in
-                                    deviceSellingPrices[device.imei] = newValue
-                                    updateProfitLoss(for: device, sellingPrice: newValue)
+                                    if !useCommonPrice {
+                                        deviceSellingPrices[device.imei] = newValue
+                                        updateProfitLoss(for: device, sellingPrice: newValue)
+                                    }
                                 }
-                            )
+                            ),
+                            isDisabled: useCommonPrice
                         )
                     }
                 }
@@ -3405,6 +3537,13 @@ struct PriceSettingInterface: View {
             }
             
             Spacer()
+        }
+    }
+    
+    private func applyCommonPriceToAll() {
+        for device in selectedDevices {
+            deviceSellingPrices[device.imei] = commonPrice
+            updateProfitLoss(for: device, sellingPrice: commonPrice)
         }
     }
     
@@ -3419,6 +3558,7 @@ struct PriceSettingInterface: View {
 struct DevicePriceRow: View {
     let device: SalesAddProductDialog.DeviceInfo
     @Binding var sellingPrice: String
+    var isDisabled: Bool = false
     @FocusState private var isPriceFieldFocused: Bool
     
     private var profitLoss: Double {
@@ -3448,7 +3588,7 @@ struct DevicePriceRow: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 16) {
+            HStack(spacing: 20) {
                 // Device info
                 VStack(alignment: .leading, spacing: 4) {
                     Text(device.imei)
@@ -3459,6 +3599,7 @@ struct DevicePriceRow: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundColor(.secondary)
                 }
+                .frame(minWidth: 200, alignment: .leading)
                 
                 Spacer()
                 
@@ -3472,6 +3613,8 @@ struct DevicePriceRow: View {
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(.primary)
                 }
+                .frame(minWidth: 90, alignment: .trailing)
+                .padding(.trailing, 12)
                 
                 // Selling price input
                 VStack(alignment: .trailing, spacing: 4) {
@@ -3493,8 +3636,12 @@ struct DevicePriceRow: View {
                             .focused($isPriceFieldFocused)
                             .frame(width: 80)
                             .multilineTextAlignment(.trailing)
+                            .disabled(isDisabled)
+                            .opacity(isDisabled ? 0.6 : 1.0)
                     }
                 }
+                .frame(minWidth: 100, alignment: .trailing)
+                .padding(.trailing, 12)
                 
                 // Profit/Loss
                 VStack(alignment: .trailing, spacing: 4) {
@@ -3506,10 +3653,10 @@ struct DevicePriceRow: View {
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(profitLossColor)
                 }
-                .frame(width: 70)
+                .frame(minWidth: 80, alignment: .trailing)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
             .background(
                 RoundedRectangle(cornerRadius: 8)
                     .fill(.regularMaterial)

@@ -256,7 +256,7 @@ struct SalesView: View {
                 })
             }
             .fullScreenCover(item: $itemToEdit) { item in
-                EditProductDialog(isPresented: .constant(true), onDismiss: {
+                SalesEditProductDialog(isPresented: .constant(true), onDismiss: {
                     itemToEdit = nil
                 }, onSave: { items in
                     updateCartItem(with: items.first!)
@@ -314,7 +314,7 @@ struct SalesView: View {
             })
         }
         .sheet(item: $itemToEdit) { item in
-            EditProductDialog(isPresented: .constant(true), onDismiss: {
+            SalesEditProductDialog(isPresented: .constant(true), onDismiss: {
                 itemToEdit = nil
             }, onSave: { items in
                 updateCartItem(with: items.first!)

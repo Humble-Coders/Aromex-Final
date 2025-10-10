@@ -139,9 +139,7 @@ struct ContentView: View {
                 }
             }
             .sheet(isPresented: $showingAddCustomerDialog) {
-                AddCustomerDialog(
-                    isPresented: $showingAddCustomerDialog
-                )
+                AddCustomerDialog(isPresented: $showingAddCustomerDialog)
             }
             .onChange(of: showingBillScreen) { isShowing in
                 if isShowing {
@@ -244,8 +242,8 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
                     .background(
-                        (ipadIsUpdating || ipadEditValue.isEmpty) ? 
-                        Color.gray : 
+                        (ipadIsUpdating || ipadEditValue.isEmpty) ?
+                        Color.gray :
                         Color(red: 0.25, green: 0.33, blue: 0.54)
                     )
                     .cornerRadius(8)
@@ -444,6 +442,7 @@ struct SidebarView: View {
     var menuItems: [(String, String)] {
         var items: [(String, String)] = [
             ("Home", "house"),
+            ("Transactions", "arrow.left.arrow.right"),
             ("Purchase", "cart"),
             ("Sales", "chart.line.uptrend.xyaxis"),
             ("Profiles", "person.3"),
@@ -598,6 +597,10 @@ struct MainContentView: View {
                                         balanceViewModel: balanceViewModel
                                     )
                                     QuickActionsView(showingAddCustomerDialog: $showingAddCustomerDialog)
+                                } else if selectedMenuItem == "Transactions" {
+                                    AddEntryView()
+                                        .environmentObject(FirebaseManager.shared)
+                                        .environmentObject(CustomerNavigationManager.shared)
                                 } else if selectedMenuItem == "Profiles" {
                                     ProfilesView(
                                         isDeletingEntity: $isDeletingEntity,

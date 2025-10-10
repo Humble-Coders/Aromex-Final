@@ -510,7 +510,7 @@ struct AddEntryView: View {
             }
         }
         .sheet(isPresented: $showingAddCustomerDialog) {
-            AddCustomerDialog()
+            AddCustomerDialog(isPresented: $showingAddCustomerDialog)
         }
         .sheet(isPresented: $showingAddCurrencyDialog) {
             AddCurrencyDialog()
@@ -916,8 +916,13 @@ struct AddEntryView: View {
                 } else {
                     LazyVStack(spacing: 12) {
                         ForEach(filteredMixedTransactions) { mixedTransaction in
-                            MixedTransactionView(mixedTransaction: mixedTransaction)
-                                .frame(maxWidth: .infinity)
+                            // Only show currency transactions
+                            if let currencyTx = mixedTransaction.currencyTransaction {
+                                TransactionRowView(transaction: currencyTx)
+                                    .environmentObject(FirebaseManager.shared)
+                                    .environmentObject(CustomerNavigationManager.shared)
+                                    .frame(maxWidth: .infinity)
+                            }
                         }
                     }
                 }

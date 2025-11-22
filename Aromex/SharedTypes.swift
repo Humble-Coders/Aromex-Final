@@ -64,10 +64,11 @@ struct PhoneItem: Identifiable, Hashable {
     let status: String
     let storageLocation: String
     let imeis: [String]
-    let unitCost: Double
+    let unitCost: Double // Selling price (for sales) or purchase price (for purchases)
+    let actualCost: Double? // Actual purchase cost (for sales only, stored when phone was originally purchased)
     
     // Initializer for new items (generates new UUID)
-    init(brand: String, model: String, capacity: String, capacityUnit: String, color: String, carrier: String, status: String, storageLocation: String, imeis: [String], unitCost: Double) {
+    init(brand: String, model: String, capacity: String, capacityUnit: String, color: String, carrier: String, status: String, storageLocation: String, imeis: [String], unitCost: Double, actualCost: Double? = nil) {
         self.id = UUID()
         self.brand = brand
         self.model = model
@@ -79,10 +80,11 @@ struct PhoneItem: Identifiable, Hashable {
         self.storageLocation = storageLocation
         self.imeis = imeis
         self.unitCost = unitCost
+        self.actualCost = actualCost
     }
     
     // Initializer for editing existing items (preserves existing UUID)
-    init(id: UUID, brand: String, model: String, capacity: String, capacityUnit: String, color: String, carrier: String, status: String, storageLocation: String, imeis: [String], unitCost: Double) {
+    init(id: UUID, brand: String, model: String, capacity: String, capacityUnit: String, color: String, carrier: String, status: String, storageLocation: String, imeis: [String], unitCost: Double, actualCost: Double? = nil) {
         self.id = id
         self.brand = brand
         self.model = model
@@ -94,5 +96,27 @@ struct PhoneItem: Identifiable, Hashable {
         self.storageLocation = storageLocation
         self.imeis = imeis
         self.unitCost = unitCost
+        self.actualCost = actualCost
+    }
+}
+
+// Represents a service item added in the Sales flow
+struct ServiceItem: Identifiable, Hashable {
+    let id: UUID
+    let name: String
+    let price: Double
+    
+    // Initializer for new items (generates new UUID)
+    init(name: String, price: Double) {
+        self.id = UUID()
+        self.name = name
+        self.price = price
+    }
+    
+    // Initializer for editing existing items (preserves existing UUID)
+    init(id: UUID, name: String, price: Double) {
+        self.id = id
+        self.name = name
+        self.price = price
     }
 }

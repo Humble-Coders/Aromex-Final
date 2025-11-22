@@ -151,24 +151,11 @@ class FirebaseManager: ObservableObject {
                 if let name = data["name"] as? String, !name.isEmpty {
                     print("👤 Found \(type.rawValue.lowercased()): '\(name)'")
                     
-                    // For customers, read all fields. For middlemen/suppliers, only name and balance
-                    let phone: String
-                    let email: String
-                    let address: String
-                    let notes: String
-                    
-                    if type == .customer {
-                        phone = data["phone"] as? String ?? ""
-                        email = data["email"] as? String ?? ""
-                        address = data["address"] as? String ?? ""
-                        notes = data["notes"] as? String ?? ""
-                    } else {
-                        // Middlemen and Suppliers only need name and balance
-                        phone = ""
-                        email = ""
-                        address = ""
-                        notes = ""
-                    }
+                    // Read all fields for all entity types
+                    let phone = data["phone"] as? String ?? ""
+                    let email = data["email"] as? String ?? ""
+                    let address = data["address"] as? String ?? ""
+                    let notes = data["notes"] as? String ?? ""
                     
                     // Handle balance flexibly for all types
                     var balance: Double = 0.0

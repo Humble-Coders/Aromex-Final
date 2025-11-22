@@ -10,38 +10,40 @@ class BillGenerator {
     private let maxItemsPerContinuationPage = 18
     
     func generateBillHTML(for purchase: Purchase) throws -> [String] {
-        let itemCount = purchase.purchasedPhones.count
+        let phoneCount = purchase.purchasedPhones.count
+        let serviceCount = purchase.services.count
+        let itemCount = phoneCount + serviceCount
+        let allItems = combineItems(phones: purchase.purchasedPhones, services: purchase.services)
         
         // Single page: 8 or fewer items
         if itemCount <= maxItemsForSinglePage {
-            return [try generateSinglePageHTML(for: purchase)]
+            return [try generateSinglePageHTML(for: purchase, items: allItems)]
         }
         
         // 9-13 items: put full table on first page, totals/payment/notes on second (footer) page
         if itemCount <= maxItemsForShortFirstPage {
-            let firstPageHTML = try generateFirstPage(for: purchase, items: purchase.purchasedPhones)
+            let firstPageHTML = try generateFirstPage(for: purchase, items: allItems)
             let footerPageHTML = try generateFooterPage(for: purchase)
             return [firstPageHTML, footerPageHTML]
         }
         
         // Multi-page: 14+ items
-        return try generateMultiPageHTMLArray(for: purchase)
+        return try generateMultiPageHTMLArray(for: purchase, allItems: allItems)
     }
     
-    private func generateSinglePageHTML(for purchase: Purchase) throws -> String {
+    private func generateSinglePageHTML(for purchase: Purchase, items: [[String: Any]]) throws -> String {
         guard let templatePath = Bundle.main.path(forResource: "invoice_single_page", ofType: "html"),
               let templateContent = try? String(contentsOfFile: templatePath, encoding: .utf8) else {
             throw BillGenerationError.templateNotFound
         }
         
-        return try populateTemplate(templateContent, with: purchase, items: purchase.purchasedPhones)
+        return try populateTemplate(templateContent, with: purchase, items: items)
     }
     
     // Removed short-first-page generator; 9-13 case uses existing first + footer templates
     
-    private func generateMultiPageHTMLArray(for purchase: Purchase) throws -> [String] {
+    private func generateMultiPageHTMLArray(for purchase: Purchase, allItems: [[String: Any]]) throws -> [String] {
         var htmlPages: [String] = []
-        let allItems = purchase.purchasedPhones
         
         // First page with up to 16 items
         let firstPageItems = Array(allItems.prefix(maxItemsForLongFirstPage))
@@ -168,23 +170,41 @@ class BillGenerator {
         return formattedValue
     }
     
-    private func generateItemsRows(for phones: [[String: Any]]) -> String {
+    private func generateItemsRows(for items: [[String: Any]]) -> String {
         var rows = ""
         
-        for phoneData in phones {
-            let description = generatePhoneDescription(phoneData)
-            let imei = phoneData["imei"] as? String ?? "N/A"
-            let unitCost = phoneData["unitCost"] as? Double ?? 0.0
-            let total = unitCost
+        for itemData in items {
+            let itemType = itemData["itemType"] as? String ?? "phone"
             
-            rows += """
-            <tr>
-                <td><div class="item-description">\(description)</div></td>
-                <td>\(imei)</td>
-                <td>$\(String(format: "%.2f", unitCost))</td>
-                <td>$\(String(format: "%.2f", total))</td>
-            </tr>
-            """
+            if itemType == "service" {
+                // Generate service row
+                let serviceName = itemData["name"] as? String ?? "N/A"
+                let servicePrice = itemData["price"] as? Double ?? 0.0
+                
+                rows += """
+                <tr>
+                    <td><div class="item-description">\(serviceName) <span style="color: #666; font-size: 0.9em;">(Service)</span></div></td>
+                    <td>-</td>
+                    <td>$\(String(format: "%.2f", servicePrice))</td>
+                    <td>$\(String(format: "%.2f", servicePrice))</td>
+                </tr>
+                """
+            } else {
+                // Generate phone row (existing logic)
+                let description = generatePhoneDescription(itemData)
+                let imei = itemData["imei"] as? String ?? "N/A"
+                let unitCost = itemData["unitCost"] as? Double ?? 0.0
+                let total = unitCost
+                
+                rows += """
+                <tr>
+                    <td><div class="item-description">\(description)</div></td>
+                    <td>\(imei)</td>
+                    <td>$\(String(format: "%.2f", unitCost))</td>
+                    <td>$\(String(format: "%.2f", total))</td>
+                </tr>
+                """
+            }
         }
         
         return rows
@@ -211,6 +231,182 @@ class BillGenerator {
         }
         
         return description
+    }
+    
+    // MARK: - Sales Invoice Generation
+    
+    func generateSalesInvoiceHTML(for sale: Sale) throws -> [String] {
+        // Combine phones and services for item count
+        let phoneCount = sale.soldPhones.count
+        let serviceCount = sale.services.count
+        let itemCount = phoneCount + serviceCount
+        let allItems = combineItems(phones: sale.soldPhones, services: sale.services)
+        
+        // Single page: 8 or fewer items
+        if itemCount <= maxItemsForSinglePage {
+            return [try generateSalesSinglePageHTML(for: sale, items: allItems)]
+        }
+        
+        // 9-13 items: put full table on first page, totals/payment/notes on second (footer) page
+        if itemCount <= maxItemsForShortFirstPage {
+            let firstPageHTML = try generateSalesFirstPage(for: sale, items: allItems)
+            let footerPageHTML = try generateSalesFooterPage(for: sale)
+            return [firstPageHTML, footerPageHTML]
+        }
+        
+        // Multi-page: 14+ items
+        return try generateSalesMultiPageHTMLArray(for: sale, items: allItems)
+    }
+    
+    // Combine phones and services into a single array for display
+    private func combineItems(phones: [[String: Any]], services: [[String: Any]]) -> [[String: Any]] {
+        var allItems: [[String: Any]] = []
+        
+        // Add phones first
+        for phone in phones {
+            var item = phone
+            item["itemType"] = "phone"
+            allItems.append(item)
+        }
+        
+        // Add services
+        for service in services {
+            var item = service
+            item["itemType"] = "service"
+            allItems.append(item)
+        }
+        
+        return allItems
+    }
+    
+    private func generateSalesSinglePageHTML(for sale: Sale, items: [[String: Any]]) throws -> String {
+        guard let templatePath = Bundle.main.path(forResource: "sales_invoice_single_page", ofType: "html"),
+              let templateContent = try? String(contentsOfFile: templatePath, encoding: .utf8) else {
+            throw BillGenerationError.templateNotFound
+        }
+        
+        return try populateSalesTemplate(templateContent, with: sale, items: items)
+    }
+    
+    private func generateSalesMultiPageHTMLArray(for sale: Sale, items: [[String: Any]]) throws -> [String] {
+        var htmlPages: [String] = []
+        let allItems = items
+        
+        // First page with up to 16 items
+        let firstPageItems = Array(allItems.prefix(maxItemsForLongFirstPage))
+        let firstPageHTML = try generateSalesFirstPage(for: sale, items: firstPageItems)
+        htmlPages.append(firstPageHTML)
+        
+        var remainingItems = Array(allItems.dropFirst(maxItemsForLongFirstPage))
+        
+        // Middle pages with continuation items
+        while remainingItems.count > maxItemsPerContinuationPage {
+            let pageItems = Array(remainingItems.prefix(maxItemsPerContinuationPage))
+            let middlePageHTML = try generateSalesMiddlePage(for: sale, items: pageItems)
+            htmlPages.append(middlePageHTML)
+            remainingItems = Array(remainingItems.dropFirst(maxItemsPerContinuationPage))
+        }
+        
+        // Last page with remaining items + totals + payment
+        if !remainingItems.isEmpty {
+            let lastPageHTML = try generateSalesLastPage(for: sale, items: remainingItems)
+            htmlPages.append(lastPageHTML)
+        } else {
+            let footerPageHTML = try generateSalesFooterPage(for: sale)
+            htmlPages.append(footerPageHTML)
+        }
+        
+        return htmlPages
+    }
+    
+    private func generateSalesFirstPage(for sale: Sale, items: [[String: Any]]) throws -> String {
+        guard let templatePath = Bundle.main.path(forResource: "sales_invoice_first_page", ofType: "html"),
+              let templateContent = try? String(contentsOfFile: templatePath, encoding: .utf8) else {
+            throw BillGenerationError.templateNotFound
+        }
+        
+        return try populateSalesTemplate(templateContent, with: sale, items: items)
+    }
+    
+    private func generateSalesMiddlePage(for sale: Sale, items: [[String: Any]]) throws -> String {
+        guard let templatePath = Bundle.main.path(forResource: "sales_invoice_middle_page", ofType: "html"),
+              let templateContent = try? String(contentsOfFile: templatePath, encoding: .utf8) else {
+            throw BillGenerationError.templateNotFound
+        }
+        
+        return try populateSalesTemplate(templateContent, with: sale, items: items)
+    }
+    
+    private func generateSalesLastPage(for sale: Sale, items: [[String: Any]]) throws -> String {
+        guard let templatePath = Bundle.main.path(forResource: "sales_invoice_last_page", ofType: "html"),
+              let templateContent = try? String(contentsOfFile: templatePath, encoding: .utf8) else {
+            throw BillGenerationError.templateNotFound
+        }
+        
+        return try populateSalesTemplate(templateContent, with: sale, items: items)
+    }
+    
+    private func generateSalesFooterPage(for sale: Sale) throws -> String {
+        guard let templatePath = Bundle.main.path(forResource: "sales_invoice_footer_page", ofType: "html"),
+              let templateContent = try? String(contentsOfFile: templatePath, encoding: .utf8) else {
+            throw BillGenerationError.templateNotFound
+        }
+        
+        return try populateSalesTemplate(templateContent, with: sale, items: [])
+    }
+    
+    private func populateSalesTemplate(_ template: String, with sale: Sale, items: [[String: Any]]) throws -> String {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "MMM dd, yyyy"
+        let formattedDate = dateFormatter.string(from: sale.transactionDate)
+        
+        let itemsHTML = generateItemsRows(for: items)
+        
+        var html = template
+        html = html.replacingOccurrences(of: "{{customer_name}}", with: sale.customerName ?? "N/A")
+        html = html.replacingOccurrences(of: "{{order_number}}", with: "ORD-\(sale.orderNumber)")
+        html = html.replacingOccurrences(of: "{{transaction_date}}", with: formattedDate)
+        html = html.replacingOccurrences(of: "{{subtotal}}", with: String(format: "%.2f", sale.subtotal))
+        html = html.replacingOccurrences(of: "{{gst_percentage}}", with: String(format: "%.1f", sale.gstPercentage))
+        html = html.replacingOccurrences(of: "{{gst_amount}}", with: String(format: "%.2f", sale.gstAmount))
+        html = html.replacingOccurrences(of: "{{pst_percentage}}", with: String(format: "%.1f", sale.pstPercentage))
+        html = html.replacingOccurrences(of: "{{pst_amount}}", with: String(format: "%.2f", sale.pstAmount))
+        html = html.replacingOccurrences(of: "{{adjustment_amount}}", with: String(format: "%.2f", sale.adjustmentAmount))
+        html = html.replacingOccurrences(of: "{{adjustment_unit}}", with: sale.adjustmentUnit)
+        html = html.replacingOccurrences(of: "{{grand_total}}", with: String(format: "%.2f", sale.grandTotal))
+        html = html.replacingOccurrences(of: "{{notes}}", with: sale.notes.isEmpty ? "No additional notes" : sale.notes)
+        html = html.replacingOccurrences(of: "{{items}}", with: itemsHTML)
+
+        // Company header info
+        if let companyAddress = sale.companyAddress, !companyAddress.isEmpty {
+            html = html.replacingOccurrences(of: "123 Business Avenue, Suite 100, City, State 12345", with: companyAddress)
+        }
+        if let companyEmail = sale.companyEmail, !companyEmail.isEmpty,
+           let companyPhone = sale.companyPhone, !companyPhone.isEmpty {
+            html = html.replacingOccurrences(of: "Email: info@aromex.com | Phone: (123) 456-7890", with: "Email: \(companyEmail) | Phone: \(companyPhone)")
+        }
+        
+        // Customer phone
+        if let customerPhone = sale.customerPhone, !customerPhone.isEmpty {
+            html = html.replacingOccurrences(of: "{{customer_phone}}", with: customerPhone)
+        } else {
+            html = html.replacingOccurrences(of: "{{customer_phone}}", with: "")
+        }
+        
+        let cashPaid = sale.paymentMethods["cash"] as? Double ?? 0.0
+        let bankPaid = sale.paymentMethods["bank"] as? Double ?? 0.0
+        let creditCardPaid = sale.paymentMethods["creditCard"] as? Double ?? 0.0
+        let totalPaid = sale.paymentMethods["totalPaid"] as? Double ?? 0.0
+        let remainingCredit = sale.paymentMethods["remainingCredit"] as? Double ?? 0.0
+        
+        // Format payment amounts with color for negatives
+        html = html.replacingOccurrences(of: "{{payment_cash}}", with: formatAmount(cashPaid))
+        html = html.replacingOccurrences(of: "{{payment_bank}}", with: formatAmount(bankPaid))
+        html = html.replacingOccurrences(of: "{{payment_credit_card}}", with: formatAmount(creditCardPaid))
+        html = html.replacingOccurrences(of: "{{payment_total_paid}}", with: formatAmount(totalPaid))
+        html = html.replacingOccurrences(of: "{{payment_remaining_credit}}", with: formatAmount(remainingCredit))
+        
+        return html
     }
 }
 

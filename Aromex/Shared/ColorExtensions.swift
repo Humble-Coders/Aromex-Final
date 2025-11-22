@@ -44,6 +44,22 @@ extension Color {
         return Color(.systemGray5)
         #endif
     }
+    
+    static var secondarySystemBackground: Color {
+        #if os(macOS)
+        return Color(NSColor.controlBackgroundColor)
+        #else
+        return Color(.secondarySystemBackground)
+        #endif
+    }
+    
+    static var tertiarySystemBackground: Color {
+        #if os(macOS)
+        return Color(NSColor.textBackgroundColor)
+        #else
+        return Color(.tertiarySystemBackground)
+        #endif
+    }
 }
 
 

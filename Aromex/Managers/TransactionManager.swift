@@ -161,12 +161,12 @@ class TransactionManager: ObservableObject {
         Task {
             do {
                 // Validate customers exist in their respective collections
-                if fromCustomer.id != "myself_special_id" {
+                if fromCustomer.id != "myself_special_id" && fromCustomer.id != "myself_bank_special_id" {
                     let fromCustomerType = try await getCustomerType(customerId: fromCustomer.id!)
                     print("✅ Found \(fromCustomer.name) in \(fromCustomerType.displayName) collection")
                 }
                 
-                if toCustomer.id != "myself_special_id" {
+                if toCustomer.id != "myself_special_id" && toCustomer.id != "myself_bank_special_id" {
                     let toCustomerType = try await getCustomerType(customerId: toCustomer.id!)
                     print("✅ Found \(toCustomer.name) in \(toCustomerType.displayName) collection")
                 }
@@ -219,12 +219,12 @@ class TransactionManager: ObservableObject {
         Task {
             do {
                 // Validate customers exist in their respective collections
-                if fromCustomer.id != "myself_special_id" {
+                if fromCustomer.id != "myself_special_id" && fromCustomer.id != "myself_bank_special_id" {
                     let fromCustomerType = try await getCustomerType(customerId: fromCustomer.id!)
                     print("✅ Found \(fromCustomer.name) in \(fromCustomerType.displayName) collection")
                 }
                 
-                if toCustomer.id != "myself_special_id" {
+                if toCustomer.id != "myself_special_id" && toCustomer.id != "myself_bank_special_id" {
                     let toCustomerType = try await getCustomerType(customerId: toCustomer.id!)
                     print("✅ Found \(toCustomer.name) in \(toCustomerType.displayName) collection")
                 }
@@ -267,6 +267,9 @@ class TransactionManager: ObservableObject {
         if fromCustomer.id == "myself_special_id" {
             // Update my cash balance
             try await updateMyCashBalance(currency: currency, amount: -amount, batch: batch)
+        } else if fromCustomer.id == "myself_bank_special_id" {
+            // Update my bank balance (only CAD supported)
+            try await updateMyBankBalance(amount: -amount, batch: batch)
         } else {
             // Update customer balance
             try await updateCustomerBalance(customerId: fromCustomer.id!, currency: currency, amount: -amount, batch: batch)
@@ -276,6 +279,9 @@ class TransactionManager: ObservableObject {
         if toCustomer.id == "myself_special_id" {
             // Update my cash balance
             try await updateMyCashBalance(currency: currency, amount: amount, batch: batch)
+        } else if toCustomer.id == "myself_bank_special_id" {
+            // Update my bank balance (only CAD supported)
+            try await updateMyBankBalance(amount: amount, batch: batch)
         } else {
             // Update customer balance
             try await updateCustomerBalance(customerId: toCustomer.id!, currency: currency, amount: amount, batch: batch)
@@ -297,6 +303,15 @@ class TransactionManager: ObservableObject {
                 let currentAmount = myNewBalances[currency.name] ?? 0.0
                 myNewBalances[currency.name] = currentAmount - amount
             }
+            balancesAfterTransaction["myself"] = myNewBalances
+        } else if fromCustomer.id == "myself_bank_special_id" {
+            // For myself bank, get what the balances will be after this transaction
+            let myCurrentBalances = try await getMyBankBalances()
+            var myNewBalances = myCurrentBalances
+            
+            // Bank only supports CAD
+            let currentAmount = myNewBalances["CAD"] ?? 0.0
+            myNewBalances["CAD"] = currentAmount - amount
             balancesAfterTransaction["myself"] = myNewBalances
         } else {
             // For customers, get what the balances will be after this transaction
@@ -326,6 +341,15 @@ class TransactionManager: ObservableObject {
                 let currentAmount = myNewBalances[currency.name] ?? 0.0
                 myNewBalances[currency.name] = currentAmount + amount
             }
+            balancesAfterTransaction["myself"] = myNewBalances
+        } else if toCustomer.id == "myself_bank_special_id" {
+            // For myself bank, get what the balances will be after this transaction
+            let myCurrentBalances = try await getMyBankBalances()
+            var myNewBalances = myCurrentBalances
+            
+            // Bank only supports CAD
+            let currentAmount = myNewBalances["CAD"] ?? 0.0
+            myNewBalances["CAD"] = currentAmount + amount
             balancesAfterTransaction["myself"] = myNewBalances
         } else {
             // For customers, get what the balances will be after this transaction
@@ -385,6 +409,11 @@ class TransactionManager: ObservableObject {
         // Handle giver balance update (deduct giving currency)
         if fromCustomer.id == "myself_special_id" {
             try await updateMyCashBalance(currency: givingCurrency, amount: -amount, batch: batch)
+        } else if fromCustomer.id == "myself_bank_special_id" {
+            // Bank only supports CAD, so we only handle if currency is CAD
+            if givingCurrency.symbol == "$" {
+                try await updateMyBankBalance(amount: -amount, batch: batch)
+            }
         } else {
             try await updateCustomerBalance(customerId: fromCustomer.id!, currency: givingCurrency, amount: -amount, batch: batch)
         }
@@ -392,6 +421,11 @@ class TransactionManager: ObservableObject {
         // Handle taker balance update (add receiving currency)
         if toCustomer.id == "myself_special_id" {
             try await updateMyCashBalance(currency: receivingCurrency, amount: receivedAmount, batch: batch)
+        } else if toCustomer.id == "myself_bank_special_id" {
+            // Bank only supports CAD, so we only handle if currency is CAD
+            if receivingCurrency.symbol == "$" {
+                try await updateMyBankBalance(amount: receivedAmount, batch: batch)
+            }
         } else {
             try await updateCustomerBalance(customerId: toCustomer.id!, currency: receivingCurrency, amount: receivedAmount, batch: batch)
         }
@@ -410,6 +444,15 @@ class TransactionManager: ObservableObject {
             } else {
                 let currentAmount = myNewBalances[givingCurrency.name] ?? 0.0
                 myNewBalances[givingCurrency.name] = currentAmount - amount
+            }
+            balancesAfterTransaction["myself"] = myNewBalances
+        } else if fromCustomer.id == "myself_bank_special_id" {
+            // Bank only supports CAD
+            let myCurrentBalances = try await getMyBankBalances()
+            var myNewBalances = myCurrentBalances
+            if givingCurrency.symbol == "$" {
+                let currentAmount = myNewBalances["CAD"] ?? 0.0
+                myNewBalances["CAD"] = currentAmount - amount
             }
             balancesAfterTransaction["myself"] = myNewBalances
         } else {
@@ -437,6 +480,15 @@ class TransactionManager: ObservableObject {
             } else {
                 let currentAmount = myNewBalances[receivingCurrency.name] ?? 0.0
                 myNewBalances[receivingCurrency.name] = currentAmount + receivedAmount
+            }
+            balancesAfterTransaction["myself"] = myNewBalances
+        } else if toCustomer.id == "myself_bank_special_id" {
+            // Bank only supports CAD
+            let myCurrentBalances = try await getMyBankBalances()
+            var myNewBalances = myCurrentBalances
+            if receivingCurrency.symbol == "$" {
+                let currentAmount = myNewBalances["CAD"] ?? 0.0
+                myNewBalances["CAD"] = currentAmount + receivedAmount
             }
             balancesAfterTransaction["myself"] = myNewBalances
         } else {
@@ -485,7 +537,7 @@ class TransactionManager: ObservableObject {
     }
     
     private func updateMyCashBalance(currency: Currency, amount: Double, batch: WriteBatch) async throws {
-        let balancesRef = db.collection("Balances").document("Cash")
+        let balancesRef = db.collection("Balances").document("cash")
         
         // Get current balances
         let balancesDoc = try await balancesRef.getDocument()
@@ -507,6 +559,23 @@ class TransactionManager: ObservableObject {
         batch.setData(currentData, forDocument: balancesRef, merge: true)
     }
     
+    private func updateMyBankBalance(amount: Double, batch: WriteBatch) async throws {
+        let balancesRef = db.collection("Balances").document("bank")
+        
+        // Get current balance
+        let balancesDoc = try await balancesRef.getDocument()
+        var currentData = balancesDoc.data() ?? [:]
+        
+        // Update CAD amount (bank only supports CAD)
+        let currentAmount = currentData["amount"] as? Double ?? 0.0
+        currentData["amount"] = currentAmount + amount
+        print("💰 My BANK balance: \(currentAmount) + \(amount) = \(currentAmount + amount)")
+        
+        // Add timestamp
+        currentData["updatedAt"] = Timestamp()
+        
+        batch.setData(currentData, forDocument: balancesRef, merge: true)
+    }
     
     private func updateCustomerBalance(customerId: String, currency: String, amount: Double, batch: WriteBatch) async throws {
         let db = Firestore.firestore()
@@ -577,6 +646,11 @@ class TransactionManager: ObservableObject {
     }
     
     private func getCustomerType(customerId: String) async throws -> CustomerType {
+        // Handle special customer types
+        if customerId == "myself_special_id" || customerId == "myself_bank_special_id" {
+            return .customer
+        }
+        
         let db = Firestore.firestore()
         
         // Check in Customers collection first
@@ -605,7 +679,7 @@ class TransactionManager: ObservableObject {
     }
     
     private func getMyCashBalances() async throws -> [String: Double] {
-        let balancesRef = db.collection("Balances").document("Cash")
+        let balancesRef = db.collection("Balances").document("cash")
         let balancesDoc = try await balancesRef.getDocument()
         let data = balancesDoc.data() ?? [:]
         
@@ -614,6 +688,18 @@ class TransactionManager: ObservableObject {
             if key != "updatedAt", let doubleValue = value as? Double {
                 balances[key] = doubleValue
             }
+        }
+        return balances
+    }
+    
+    private func getMyBankBalances() async throws -> [String: Double] {
+        let balancesRef = db.collection("Balances").document("bank")
+        let balancesDoc = try await balancesRef.getDocument()
+        let data = balancesDoc.data() ?? [:]
+        
+        var balances: [String: Double] = [:]
+        if let amount = data["amount"] as? Double {
+            balances["CAD"] = amount
         }
         return balances
     }

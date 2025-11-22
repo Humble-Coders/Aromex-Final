@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        @page { size: A4; margin: 0; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            font-size: 10px;
+            color: #1d1d1f;
+            width: 210mm;
+            height: 297mm;
+            padding: 20mm;
+            margin: 0 auto;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #007AFF;
+        }
+        .company-info h1 { font-size: 26px; font-weight: 700; color: #007AFF; margin-bottom: 4px; }
+        .company-info .contact-line {
+            font-size: 9px;
+            color: #86868b;
+            line-height: 1.6;
+            margin-top: 6px;
+        }
+        .invoice-meta { text-align: right; }
+        .invoice-meta h2 { font-size: 20px; font-weight: 600; color: #1d1d1f; margin-bottom: 4px; }
+        .invoice-meta .invoice-type { font-size: 10px; color: #86868b; margin-bottom: 6px; }
+        .items-table {
+            width: 100%;
+            border-collapse: collapse;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .items-table th {
+            background: #007AFF;
+            color: white;
+            padding: 10px 8px;
+            font-size: 10px;
+            font-weight: 600;
+            text-align: left;
+        }
+        .items-table td {
+            padding: 9px 8px;
+            border-bottom: 1px solid #f0f0f0;
+            font-size: 10px;
+            text-align: left;
+        }
+        .items-table tr:last-child td { border-bottom: none; }
+        .items-table tr:nth-child(even) { background: #fafafa; }
+        .text-right { text-align: right; }
+        .text-center { text-align: center; }
+        .page-indicator {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 10px;
+            color: #86868b;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="company-info">
+            <h1>AROMEX</h1>
+            <div class="contact-line">123 Business Avenue, Suite 100, City, State 12345</div>
+            <div class="contact-line">Email: info@aromex.com | Phone: (123) 456-7890</div>
+        </div>
+        <div class="invoice-meta">
+            <h2>INVOICE</h2>
+            <div class="invoice-type">Sales Invoice</div>
+        </div>
+    </div>
+    
+    <table class="items-table">
+        <thead>
+            <tr>
+                <th style="width: 55%;">Item Description</th>
+                <th style="width: 25%;">IMEI/Serial</th>
+                <th style="width: 10%;" class="text-right">Unit Cost</th>
+                <th style="width: 10%;" class="text-right">Total</th>
+            </tr>
+        </thead>
+        <tbody>{{items}}</tbody>
+    </table>
+    
+    <div class="page-indicator">Continued on next page...</div>
+</body>
+</html>

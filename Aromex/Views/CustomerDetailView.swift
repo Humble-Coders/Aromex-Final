@@ -474,8 +474,8 @@ struct CustomerDetailView: View {
         customerBalances = [:]
         
         if customer.id == "myself_special_id" {
-            // Load "Myself" balances from Balances/Cash
-            db.collection("Balances").document("Cash").getDocument { snapshot, error in
+            // Load "Myself" balances from Balances/cash
+            db.collection("Balances").document("cash").getDocument { snapshot, error in
                 DispatchQueue.main.async {
                     self.isLoadingBalances = false
                     

@@ -51,6 +51,10 @@ struct ContentView: View {
     @State private var showingSalesScreen = false
     @State private var salesInvoiceId: String = ""
     
+    // Debt overview data
+    @State private var totalOwedCAD: Double = 0.0
+    @State private var totalDueCAD: Double = 0.0
+    
     var isIPad: Bool {
         #if os(iOS)
         return horizontalSizeClass == .regular && verticalSizeClass == .regular
@@ -112,7 +116,20 @@ struct ContentView: View {
                     deleteEntityOverlay
                 }
                 
-                // Supplier dropdown overlay (for Purchase screen)
+                // Supplier dropdown overlay (for Purchase screen - iPad/macOS only)
+                #if os(iOS)
+                if showingSupplierDropdown && horizontalSizeClass != .compact {
+                    SupplierDropdownOverlay(
+                        isOpen: $showingSupplierDropdown,
+                        selectedSupplier: $selectedSupplier,
+                        entities: allEntities,
+                        buttonFrame: supplierButtonFrame,
+                        searchText: supplierSearchText,
+                        entityFetchError: entityFetchError,
+                        onRetry: retryFetchEntities
+                    )
+                }
+                #else
                 if showingSupplierDropdown {
                     SupplierDropdownOverlay(
                         isOpen: $showingSupplierDropdown,
@@ -124,8 +141,22 @@ struct ContentView: View {
                         onRetry: retryFetchEntities
                     )
                 }
+                #endif
                 
-                // ADD THIS NEW CUSTOMER DROPDOWN OVERLAY (for Sales screen)
+                // ADD THIS NEW CUSTOMER DROPDOWN OVERLAY (for Sales screen - iPad/macOS only)
+                #if os(iOS)
+                if showingCustomerDropdown && horizontalSizeClass != .compact {
+                    SupplierDropdownOverlay(
+                        isOpen: $showingCustomerDropdown,
+                        selectedSupplier: $selectedCustomer,
+                        entities: allEntities,
+                        buttonFrame: customerButtonFrame,
+                        searchText: customerSearchText,
+                        entityFetchError: entityFetchError,
+                        onRetry: retryFetchEntities
+                    )
+                }
+                #else
                 if showingCustomerDropdown {
                     SupplierDropdownOverlay(
                         isOpen: $showingCustomerDropdown,
@@ -137,6 +168,7 @@ struct ContentView: View {
                         onRetry: retryFetchEntities
                     )
                 }
+                #endif
             }
             .sheet(isPresented: $showingAddCustomerDialog) {
                 AddCustomerDialog(isPresented: $showingAddCustomerDialog)
@@ -151,6 +183,9 @@ struct ContentView: View {
                 if isShowing {
                     selectedMenuItem = "SalesInvoice"
                 }
+            }
+            .onAppear {
+                fetchTotalOweDue()
             }
         }
     
@@ -328,6 +363,50 @@ struct ContentView: View {
         return formatter.string(from: NSNumber(value: amount)) ?? "$0.00"
     }
     
+    private func fetchTotalOweDue() {
+        let db = Firestore.firestore()
+        var tempTotalOwe: Double = 0.0
+        var tempTotalDue: Double = 0.0
+        
+        // Fetch all customer types
+        let customerTypes = ["Customers", "Middlemen", "Suppliers"]
+        let group = DispatchGroup()
+        
+        for collectionName in customerTypes {
+            group.enter()
+            db.collection(collectionName).getDocuments { snapshot, error in
+                defer { group.leave() }
+                
+                if let error = error {
+                    print("❌ Error fetching \(collectionName): \(error.localizedDescription)")
+                    return
+                }
+                
+                guard let documents = snapshot?.documents else { return }
+                
+                for document in documents {
+                    let data = document.data()
+                    let cadBalance = data["balance"] as? Double ?? 0.0
+                    
+                    if cadBalance < 0 {
+                        // I owe this amount
+                        tempTotalOwe += cadBalance
+                    } else if cadBalance > 0 {
+                        // This amount is due to me
+                        tempTotalDue += cadBalance
+                    }
+                }
+            }
+        }
+        
+        group.notify(queue: .main) {
+            self.totalOwedCAD = tempTotalOwe
+            self.totalDueCAD = tempTotalDue
+            print("💰 Total Owed (CAD): \(tempTotalOwe)")
+            print("💰 Total Due (CAD): \(tempTotalDue)")
+        }
+    }
+    
     var desktopView: some View {
             NavigationSplitView {
                 SidebarView(selectedMenuItem: $selectedMenuItem)
@@ -339,11 +418,11 @@ struct ContentView: View {
                     })
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if selectedMenuItem == "SalesInvoice" {
-                    // ADD THIS NEW CONDITION
+                    // Sales Invoice Screen
                     BillScreen(purchaseId: salesInvoiceId, onClose: {
                         selectedMenuItem = "Sales"
                         showingSalesScreen = false
-                    })
+                    }, isSale: true)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     MainContentView(
@@ -370,7 +449,9 @@ struct ContentView: View {
                         customerButtonFrame: $customerButtonFrame,
                         customerSearchText: $customerSearchText,
                         showingSalesScreen: $showingSalesScreen,
-                        salesInvoiceId: $salesInvoiceId
+                        salesInvoiceId: $salesInvoiceId,
+                        totalOwedCAD: totalOwedCAD,
+                        totalDueCAD: totalDueCAD
                     )
                 }
             }
@@ -404,7 +485,9 @@ struct ContentView: View {
                     customerButtonFrame: $customerButtonFrame,
                     customerSearchText: $customerSearchText,
                     showingSalesScreen: $showingSalesScreen,
-                    salesInvoiceId: $salesInvoiceId
+                    salesInvoiceId: $salesInvoiceId,
+                    totalOwedCAD: totalOwedCAD,
+                    totalDueCAD: totalDueCAD
                 )
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
@@ -446,7 +529,9 @@ struct SidebarView: View {
             ("Purchase", "cart"),
             ("Sales", "chart.line.uptrend.xyaxis"),
             ("Profiles", "person.3"),
-            ("Inventory", "archivebox")
+            ("Inventory", "archivebox"),
+            ("Balance Report", "chart.bar.doc.horizontal"),
+            ("Histories", "clock.arrow.circlepath")
         ]
         
         #if os(iOS)
@@ -455,6 +540,17 @@ struct SidebarView: View {
         
         items.append(("Statistics", "chart.bar"))
         return items
+    }
+    
+    // Helper function to determine if a menu item should be disabled
+    func shouldDisableMenuItem(_ title: String) -> Bool {
+        #if os(iOS)
+        // Disable Sales on iOS; Balance Report is enabled
+        return ["Sales"].contains(title)
+        #else
+        // Not disabled on macOS
+        return false
+        #endif
     }
     
     var body: some View {
@@ -476,7 +572,8 @@ struct SidebarView: View {
                     MenuItemView(
                         title: item.0,
                         icon: item.1,
-                        isSelected: selectedMenuItem == item.0
+                        isSelected: selectedMenuItem == item.0,
+                        isDisabled: shouldDisableMenuItem(item.0)
                     ) {
                         selectedMenuItem = item.0
                     }
@@ -495,6 +592,7 @@ struct MenuItemView: View {
     let title: String
     let icon: String
     let isSelected: Bool
+    let isDisabled: Bool
     let action: () -> Void
     
     var body: some View {
@@ -511,7 +609,7 @@ struct MenuItemView: View {
                 
                 Spacer()
                 
-                if title == "Statistics" {
+                if title == "Statistics" || isDisabled {
                     Image(systemName: "lock")
                         .font(.system(size: 12))
                         .foregroundColor(.white.opacity(0.7))
@@ -525,6 +623,8 @@ struct MenuItemView: View {
             )
         }
         .buttonStyle(PlainButtonStyle())
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.5 : 1.0)
     }
 }
 
@@ -556,6 +656,9 @@ struct MainContentView: View {
         @Binding var showingSalesScreen: Bool
         @Binding var salesInvoiceId: String
     
+    let totalOwedCAD: Double
+    let totalDueCAD: Double
+    
     var body: some View {
             VStack(spacing: 0) {
                 // Main Content Area
@@ -579,11 +682,11 @@ struct MainContentView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .ignoresSafeArea(.all)
                     } else if selectedMenuItem == "SalesInvoice" {
-                        // ADD THIS NEW CONDITION FOR SALES INVOICE
+                        // Sales Invoice Screen
                         BillScreen(purchaseId: salesInvoiceId, onClose: {
                             selectedMenuItem = "Sales"
                             showingSalesScreen = false
-                        })
+                        }, isSale: true)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .ignoresSafeArea(.all)
                     } else {
@@ -594,7 +697,9 @@ struct MainContentView: View {
                                     FinancialOverviewView(
                                         ipadEditingField: $ipadEditingField,
                                         ipadIsUpdating: $ipadIsUpdating,
-                                        balanceViewModel: balanceViewModel
+                                        balanceViewModel: balanceViewModel,
+                                        totalOwedCAD: totalOwedCAD,
+                                        totalDueCAD: totalDueCAD
                                     )
                                     QuickActionsView(showingAddCustomerDialog: $showingAddCustomerDialog)
                                 } else if selectedMenuItem == "Transactions" {
@@ -608,6 +713,7 @@ struct MainContentView: View {
                                     )
                                 } else if selectedMenuItem == "Inventory" {
                                     InventoryFinalView()
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                                 } else if selectedMenuItem == "Purchase" {
                                     PurchaseView(
                                         showingSupplierDropdown: $showingSupplierDropdown,
@@ -639,6 +745,23 @@ struct MainContentView: View {
                                             showingSalesScreen = true
                                         }
                                     )
+                                } else if selectedMenuItem == "Balance Report" {
+                                    BalanceReportView()
+                                        .environmentObject(FirebaseManager.shared)
+                                        .environmentObject(CustomerNavigationManager.shared)
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                } else if selectedMenuItem == "Histories" {
+                                    HistoriesView { transactionId, isSale in
+                                        if isSale {
+                                            salesInvoiceId = transactionId
+                                            showingSalesScreen = true
+                                            selectedMenuItem = "SalesInvoice"
+                                        } else {
+                                            billPurchaseId = transactionId
+                                            showingBillScreen = true
+                                            selectedMenuItem = "Bill"
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -655,6 +778,8 @@ struct FinancialOverviewView: View {
     @Binding var ipadEditingField: AccountBalanceCard.BalanceField?
     @Binding var ipadIsUpdating: Bool
     @ObservedObject var balanceViewModel: BalanceViewModel
+    let totalOwedCAD: Double
+    let totalDueCAD: Double
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     @Environment(\.verticalSizeClass) var verticalSizeClass
     
@@ -679,7 +804,7 @@ struct FinancialOverviewView: View {
                         ipadEditingField: $ipadEditingField,
                         ipadIsUpdating: $ipadIsUpdating
                     )
-                    DebtOverviewCard()
+                    DebtOverviewCard(totalOwed: totalOwedCAD, totalDue: totalDueCAD)
                 }
                 .padding(.horizontal, 20)
             } else {
@@ -692,7 +817,7 @@ struct FinancialOverviewView: View {
                     )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     
-                    DebtOverviewCard()
+                    DebtOverviewCard(totalOwed: totalOwedCAD, totalDue: totalDueCAD)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .frame(height: 280) // Set a fixed height for the container
@@ -883,6 +1008,9 @@ struct AccountBalanceCard: View {
 
 // Updated DebtOverviewCard with proper alignment
 struct DebtOverviewCard: View {
+    let totalOwed: Double
+    let totalDue: Double
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Card Header - Fixed at top
@@ -902,14 +1030,14 @@ struct DebtOverviewCard: View {
             VStack(spacing: 15) {
                 DebtItemView(
                     title: "Total Owed",
-                    amount: "$45,300.00",
+                    amount: String(format: "$%.2f", abs(totalOwed)),
                     icon: "arrow.up.circle",
                     color: .red
                 )
                 
                 DebtItemView(
                     title: "Total Due to Me",
-                    amount: "$67,850.00",
+                    amount: String(format: "$%.2f", totalDue),
                     icon: "arrow.down.circle",
                     color: .green
                 )
@@ -998,13 +1126,22 @@ struct MobileSidebarView: View {
     
     let menuItems = [
         ("Home", "house"),
+        ("Transactions", "arrow.left.arrow.right"),
         ("Purchase", "cart"),
         ("Sales", "chart.line.uptrend.xyaxis"),
         ("Profiles", "person.3"),
         ("Inventory", "archivebox"),
+        ("Balance Report", "chart.bar.doc.horizontal"),
+        ("Histories", "clock.arrow.circlepath"),
         ("Scanner", "camera"),
         ("Statistics", "chart.bar")
     ]
+    
+    // Helper function to determine if a menu item should be disabled
+    func shouldDisableMenuItem(_ title: String) -> Bool {
+        // No menu items disabled on iOS for this view
+        return false
+    }
     
     var body: some View {
         NavigationStack {
@@ -1027,7 +1164,8 @@ struct MobileSidebarView: View {
                         MobileMenuItemView(
                             title: item.0,
                             icon: item.1,
-                            isSelected: selectedMenuItem == item.0
+                            isSelected: selectedMenuItem == item.0,
+                            isDisabled: shouldDisableMenuItem(item.0)
                         ) {
                             selectedMenuItem = item.0
                             isPresented = false
@@ -1056,6 +1194,7 @@ struct MobileMenuItemView: View {
     let title: String
     let icon: String
     let isSelected: Bool
+    let isDisabled: Bool
     let action: () -> Void
     
     var body: some View {
@@ -1078,7 +1217,7 @@ struct MobileMenuItemView: View {
                         .foregroundColor(Color(red: 0.25, green: 0.33, blue: 0.54))
                 }
                 
-                if title == "Statistics" {
+                if title == "Statistics" || isDisabled {
                     Image(systemName: "lock")
                         .font(.system(size: 12))
                         .foregroundColor(.gray)
@@ -1089,6 +1228,8 @@ struct MobileMenuItemView: View {
             .background(isSelected ? Color(red: 0.25, green: 0.33, blue: 0.54).opacity(0.1) : Color.clear)
         }
         .buttonStyle(PlainButtonStyle())
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.5 : 1.0)
     }
 }
 #endif
@@ -1727,6 +1868,8 @@ struct EditBalanceDialog: View {
 // Quick Actions Section
 struct QuickActionsView: View {
     @Binding var showingAddCustomerDialog: Bool
+    @State private var showingQuickAddProductDialog = false
+    @State private var showingAddExpenseDialog = false
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     @Environment(\.verticalSizeClass) var verticalSizeClass
     
@@ -1758,13 +1901,17 @@ struct QuickActionsView: View {
                         title: "Add Product",
                         icon: "iphone",
                         color: Color(red: 0.60, green: 0.20, blue: 0.80),
-                        action: {}
+                        action: {
+                            showingQuickAddProductDialog = true
+                        }
                     )
                     QuickActionButton(
                         title: "Add Expense",
                         icon: "minus.circle",
                         color: Color(red: 0.90, green: 0.30, blue: 0.30),
-                        action: {}
+                        action: {
+                            showingAddExpenseDialog = true
+                        }
                     )
                 }
                 .padding(.horizontal, 20)
@@ -1787,18 +1934,37 @@ struct QuickActionsView: View {
                         title: "Add Product",
                         icon: "iphone",
                         color: Color(red: 0.60, green: 0.20, blue: 0.80),
-                        action: {}
+                        action: {
+                            showingQuickAddProductDialog = true
+                        }
                     )
                     QuickActionButton(
                         title: "Add Expense",
                         icon: "minus.circle",
                         color: Color(red: 0.90, green: 0.30, blue: 0.30),
-                        action: {}
+                        action: {
+                            showingAddExpenseDialog = true
+                        }
                     )
                 }
                 .padding(.horizontal, 30)
             }
         }
+        #if os(iOS)
+        .fullScreenCover(isPresented: $showingQuickAddProductDialog) {
+            QuickAddProductDialog(isPresented: $showingQuickAddProductDialog, onDismiss: nil)
+        }
+        .fullScreenCover(isPresented: $showingAddExpenseDialog) {
+            AddExpenseDialog(isPresented: $showingAddExpenseDialog, onDismiss: nil)
+        }
+        #else
+        .sheet(isPresented: $showingQuickAddProductDialog) {
+            QuickAddProductDialog(isPresented: $showingQuickAddProductDialog, onDismiss: nil)
+        }
+        .sheet(isPresented: $showingAddExpenseDialog) {
+            AddExpenseDialog(isPresented: $showingAddExpenseDialog, onDismiss: nil)
+        }
+        #endif
     }
 }
 

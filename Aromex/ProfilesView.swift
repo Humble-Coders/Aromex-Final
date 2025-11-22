@@ -27,7 +27,11 @@ struct ProfilesView: View {
     
     
     var isCompact: Bool {
-        horizontalSizeClass == .compact && verticalSizeClass == .regular
+        #if os(iOS)
+        return horizontalSizeClass == .compact && verticalSizeClass == .regular
+        #else
+        return false
+        #endif
     }
     
     var filteredEntities: [EntityProfile] {
@@ -105,31 +109,32 @@ struct ProfilesView: View {
         HStack {
             Image(systemName: "magnifyingglass")
                 .foregroundColor(.secondary)
-                .font(.system(size: 16, weight: .medium))
+                .font(.system(size: isCompact ? 14 : 16, weight: .medium))
             
             TextField("Search by name, phone, or balance...", text: $searchText)
                 .textFieldStyle(PlainTextFieldStyle())
-                .font(.system(size: 16, weight: .medium))
+                .font(.system(size: isCompact ? 15 : 16, weight: .medium))
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.horizontal, isCompact ? 14 : 16)
+        .padding(.vertical, isCompact ? 10 : 12)
         .background(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: isCompact ? 10 : 12)
                 .fill(.regularMaterial)
                 .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
         )
-        .padding(.horizontal, isCompact ? 20 : 30)
-        .padding(.bottom, 20)
+        .padding(.horizontal, isCompact ? 16 : 30)
+        .padding(.top, isCompact ? 8 : 0)
+        .padding(.bottom, isCompact ? 16 : 20)
     }
     
     var tabSelection: some View {
-        HStack(spacing: isCompact ? 8 : 12) {
+        HStack(spacing: isCompact ? 6 : 12) {
             ForEach(EntityType.allCases, id: \.self) { tab in
                 tabButton(for: tab)
             }
         }
-        .padding(.horizontal, isCompact ? 20 : 30)
-        .padding(.bottom, 20)
+        .padding(.horizontal, isCompact ? 16 : 30)
+        .padding(.bottom, isCompact ? 16 : 20)
     }
     
     func tabButton(for tab: EntityType) -> some View {
@@ -158,7 +163,7 @@ struct ProfilesView: View {
             tabIcon(for: tab)
             if isCompact {
                 Text(tab.rawValue)
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.system(size: 13, weight: .bold))
                     .foregroundColor(selectedTab == tab ? .white : .primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
@@ -167,8 +172,9 @@ struct ProfilesView: View {
                 Spacer()
             }
         }
-        .padding(.horizontal, isCompact ? 12 : 20)
-        .padding(.vertical, isCompact ? 10 : 16)
+        .padding(.horizontal, isCompact ? 10 : 20)
+        .padding(.vertical, isCompact ? 8 : 16)
+        .frame(maxWidth: isCompact ? .infinity : nil)
         .background(tabButtonBackground(for: tab))
     }
     
@@ -243,8 +249,9 @@ struct ProfilesView: View {
                             )
                         }
                     }
-                    .padding(.horizontal, isCompact ? 20 : 30)
-                    .padding(.bottom, 20)
+                    .padding(.horizontal, isCompact ? 16 : 30)
+                    .padding(.top, isCompact ? 8 : 0)
+                    .padding(.bottom, isCompact ? 16 : 20)
                 }
             }
         }
@@ -252,30 +259,30 @@ struct ProfilesView: View {
     
     
     var emptyStateView: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: isCompact ? 16 : 20) {
             Image(systemName: selectedTab.icon)
-                .font(.system(size: 60, weight: .light))
+                .font(.system(size: isCompact ? 50 : 60, weight: .light))
                 .foregroundColor(selectedTab.color.opacity(0.3))
             
-            VStack(spacing: 8) {
+            VStack(spacing: isCompact ? 6 : 8) {
                 Text("No \(selectedTab.rawValue.lowercased())s found")
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.system(size: isCompact ? 18 : 20, weight: .semibold))
                     .foregroundColor(.primary)
                 
                 if searchText.isEmpty {
                     Text("Add your first \(selectedTab.rawValue.lowercased()) to get started")
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.system(size: isCompact ? 14 : 16, weight: .medium))
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
                 } else {
                     Text("Try adjusting your search terms")
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.system(size: isCompact ? 14 : 16, weight: .medium))
                         .foregroundColor(.secondary)
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 40)
+        .padding(.horizontal, isCompact ? 30 : 40)
     }
     
     private func getEntityCount(for type: EntityType) -> Int {
@@ -393,25 +400,42 @@ struct EntityProfileCard: View {
     @Environment(\.verticalSizeClass) var verticalSizeClass
     
     var isCompact: Bool {
-        horizontalSizeClass == .compact && verticalSizeClass == .regular
+        #if os(iOS)
+        return horizontalSizeClass == .compact && verticalSizeClass == .regular
+        #else
+        return false
+        #endif
     }
     
     var body: some View {
         if isCompact {
-            // iPhone: Original card layout
-            HStack(spacing: 16) {
+            // iPhone: Optimized mobile card layout
+            HStack(spacing: 12) {
                 // Content
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 4) {
                     // Name
                     Text(entity.name)
-                        .font(.system(size: isCompact ? 18 : 20, weight: .bold))
+                        .font(.system(size: 17, weight: .bold))
                         .foregroundColor(.primary)
                         .lineLimit(1)
                     
                     // Balance
                     Text(formatCurrency(entity.balance))
-                        .font(.system(size: isCompact ? 16 : 18, weight: .bold))
+                        .font(.system(size: 15, weight: .bold))
                         .foregroundColor(getBalanceColor(entity.balance))
+                    
+                    // Phone (if available) - iPhone only
+                    if !entity.phone.isEmpty {
+                        HStack(spacing: 4) {
+                            Image(systemName: "phone.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                            Text(entity.phone)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
                 }
                 
                 Spacer()
@@ -419,9 +443,9 @@ struct EntityProfileCard: View {
                 // Delete Button
                 Button(action: onDelete) {
                     Image(systemName: "trash")
-                        .font(.system(size: isCompact ? 16 : 18, weight: .medium))
+                        .font(.system(size: 15, weight: .medium))
                         .foregroundColor(.red)
-                        .padding(8)
+                        .padding(10)
                         .background(
                             Circle()
                                 .fill(Color.red.opacity(0.1))
@@ -429,12 +453,12 @@ struct EntityProfileCard: View {
                 }
                 .buttonStyle(PlainButtonStyle())
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
             .background(
-                RoundedRectangle(cornerRadius: 12)
+                RoundedRectangle(cornerRadius: 10)
                     .fill(.background)
-                    .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
+                    .shadow(color: .black.opacity(0.08), radius: 6, x: 0, y: 3)
             )
             .onTapGesture {
                 onTap()

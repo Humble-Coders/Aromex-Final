@@ -16,6 +16,7 @@ import AppKit
 struct BillScreen: View {
     let purchaseId: String
     let onClose: (() -> Void)?
+    var isSale: Bool = false // Flag to indicate if this is a sales invoice
     @State private var isLoading = true
     @State private var htmlContent = ""
     @State private var htmlPages: [String] = []
@@ -23,6 +24,7 @@ struct BillScreen: View {
     @State private var pdfData: Data?
     @State private var errorMessage: String?
     @State private var purchase: Purchase?
+    @State private var sale: Sale?
     @State private var currentPage: Int = 0
     // Edit contact info state
     @State private var showingEditContact = false
@@ -46,9 +48,10 @@ struct BillScreen: View {
         htmlPages.isEmpty ? 1 : htmlPages.count
     }
     
-    init(purchaseId: String, onClose: (() -> Void)? = nil) {
+    init(purchaseId: String, onClose: (() -> Void)? = nil, isSale: Bool = false) {
         self.purchaseId = purchaseId
         self.onClose = onClose
+        self.isSale = isSale
     }
     
     var body: some View {
@@ -70,7 +73,10 @@ struct BillScreen: View {
         #if os(iOS)
         .sheet(isPresented: $showPDFShare) {
             if let pdfData = pdfData {
-                PDFShareView(pdfData: pdfData)
+                let orderNum = isSale ? (self.sale?.orderNumber ?? 0) : (self.purchase?.orderNumber ?? 0)
+                let invoiceType = isSale ? "Sales_Invoice" : "Purchase_Invoice"
+                let fileName = "\(invoiceType)_\(orderNum).pdf"
+                PDFShareView(pdfData: pdfData, fileName: fileName)
             }
         }
         // Hide title on iPhone; only back and share buttons should show
@@ -393,9 +399,11 @@ struct BillScreen: View {
         Task {
             do {
                 let db = Firestore.firestore()
-                let purchaseDoc = try await db.collection("Purchases").document(purchaseId).getDocument()
+                let collectionName = isSale ? "Sales" : "Purchases"
+                let documentRef = db.collection(collectionName).document(purchaseId)
+                let document = try await documentRef.getDocument()
                 
-                guard purchaseDoc.exists, let data = purchaseDoc.data() else {
+                guard document.exists, let data = document.data() else {
                     if currentRetry < maxRetries {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                             self.loadBillWithRetry(maxRetries: maxRetries, currentRetry: currentRetry + 1)
@@ -404,13 +412,105 @@ struct BillScreen: View {
                     }
                     
                     await MainActor.run {
-                        errorMessage = "Purchase not found after \(maxRetries + 1) attempts"
+                        let docType = isSale ? "Sale" : "Purchase"
+                        errorMessage = "\(docType) not found after \(maxRetries + 1) attempts"
                         isLoading = false
                     }
                     return
                 }
                 
-                var purchase = try Purchase.fromFirestore(data: data, id: purchaseId)
+                if isSale {
+                    var sale = try Sale.fromFirestore(data: data, id: purchaseId)
+                    
+                    // Fetch customer name/phone from reference
+                    if let customerRef = data["customer"] as? DocumentReference {
+                        let customerSnap = try await customerRef.getDocument()
+                        if customerSnap.exists {
+                            let cData = customerSnap.data() ?? [:]
+                            let cName = cData["name"] as? String
+                            let cPhone = cData["phone"] as? String
+                            sale = Sale(
+                                id: sale.id,
+                                transactionDate: sale.transactionDate,
+                                orderNumber: sale.orderNumber,
+                                subtotal: sale.subtotal,
+                                gstPercentage: sale.gstPercentage,
+                                gstAmount: sale.gstAmount,
+                                pstPercentage: sale.pstPercentage,
+                                pstAmount: sale.pstAmount,
+                                adjustmentAmount: sale.adjustmentAmount,
+                                adjustmentUnit: sale.adjustmentUnit,
+                                grandTotal: sale.grandTotal,
+                                notes: sale.notes,
+                                soldPhones: sale.soldPhones,
+                                services: sale.services,
+                                paymentMethods: sale.paymentMethods,
+                                customerName: cName ?? sale.customerName,
+                                customerAddress: sale.customerAddress,
+                                middlemanName: sale.middlemanName,
+                                middlemanPayment: sale.middlemanPayment,
+                                customerPhone: cPhone,
+                                companyAddress: sale.companyAddress,
+                                companyEmail: sale.companyEmail,
+                                companyPhone: sale.companyPhone
+                            )
+                        }
+                    }
+                    
+                    // Fetch company contact info
+                    do {
+                        async let addressDoc = db.collection("Data").document("address").getDocument()
+                        async let emailDoc = db.collection("Data").document("email").getDocument()
+                        async let phoneDoc = db.collection("Data").document("phone").getDocument()
+                        let (addrSnap, emailSnap, phoneSnap) = try await (addressDoc, emailDoc, phoneDoc)
+                        let addr = (addrSnap.data()?["address"] as? String)
+                        let email = (emailSnap.data()?["email"] as? String)
+                        let phone = (phoneSnap.data()?["phone"] as? String)
+                        sale = Sale(
+                            id: sale.id,
+                            transactionDate: sale.transactionDate,
+                            orderNumber: sale.orderNumber,
+                            subtotal: sale.subtotal,
+                            gstPercentage: sale.gstPercentage,
+                            gstAmount: sale.gstAmount,
+                            pstPercentage: sale.pstPercentage,
+                            pstAmount: sale.pstAmount,
+                            adjustmentAmount: sale.adjustmentAmount,
+                            adjustmentUnit: sale.adjustmentUnit,
+                            grandTotal: sale.grandTotal,
+                            notes: sale.notes,
+                            soldPhones: sale.soldPhones,
+                            services: sale.services,
+                            paymentMethods: sale.paymentMethods,
+                            customerName: sale.customerName,
+                            customerAddress: sale.customerAddress,
+                            middlemanName: sale.middlemanName,
+                            middlemanPayment: sale.middlemanPayment,
+                            customerPhone: sale.customerPhone,
+                            companyAddress: addr ?? sale.companyAddress,
+                            companyEmail: email ?? sale.companyEmail,
+                            companyPhone: phone ?? sale.companyPhone
+                        )
+                    } catch {
+                        // If Data collection docs are missing, proceed with nils
+                    }
+                    
+                    let generator = BillGenerator()
+                    let htmlPages = try generator.generateSalesInvoiceHTML(for: sale)
+                    
+                    await MainActor.run {
+                        self.sale = sale
+                        self.htmlPages = htmlPages
+                        self.isLoading = false
+                        self.currentPage = 0
+                        
+                        // Set edit values
+                        self.editAddress = sale.companyAddress ?? ""
+                        self.editEmail = sale.companyEmail ?? ""
+                        self.editPhone = sale.companyPhone ?? ""
+                    }
+                } else {
+                    var purchase = try Purchase.fromFirestore(data: data, id: purchaseId)
                 
                 // Fetch supplier name/phone from reference
                 if let supplierRef = data["supplier"] as? DocumentReference {
@@ -433,6 +533,7 @@ struct BillScreen: View {
                             grandTotal: purchase.grandTotal,
                             notes: purchase.notes,
                             purchasedPhones: purchase.purchasedPhones,
+                            services: purchase.services,
                             paymentMethods: purchase.paymentMethods,
                             supplierName: sName ?? purchase.supplierName,
                             supplierAddress: purchase.supplierAddress,
@@ -469,6 +570,7 @@ struct BillScreen: View {
                         grandTotal: purchase.grandTotal,
                         notes: purchase.notes,
                         purchasedPhones: purchase.purchasedPhones,
+                        services: purchase.services,
                         paymentMethods: purchase.paymentMethods,
                         supplierName: purchase.supplierName,
                         supplierAddress: purchase.supplierAddress,
@@ -492,6 +594,12 @@ struct BillScreen: View {
                     self.htmlContent = htmlPages.first ?? ""
                     self.currentPage = 0
                     self.isLoading = false
+                    
+                    // Set edit values
+                    self.editAddress = purchase.companyAddress ?? ""
+                    self.editEmail = purchase.companyEmail ?? ""
+                    self.editPhone = purchase.companyPhone ?? ""
+                }
                 }
                 
             } catch {
@@ -517,7 +625,9 @@ struct BillScreen: View {
     #if os(macOS)
     private func sharePDFOnMacOS(pdfData: Data) {
         let tempDirectory = FileManager.default.temporaryDirectory
-        let fileName = "Purchase_Invoice_\(self.purchase?.orderNumber ?? 0).pdf"
+        let orderNum = isSale ? (self.sale?.orderNumber ?? 0) : (self.purchase?.orderNumber ?? 0)
+        let invoiceType = isSale ? "Sales_Invoice" : "Purchase_Invoice"
+        let fileName = "\(invoiceType)_\(orderNum).pdf"
         let tempURL = tempDirectory.appendingPathComponent(fileName)
         
         do {
@@ -995,10 +1105,22 @@ struct BillWebView: NSViewRepresentable {
 #if os(iOS)
 struct PDFShareView: UIViewControllerRepresentable {
     let pdfData: Data
+    let fileName: String
     
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        let activityVC = UIActivityViewController(activityItems: [pdfData], applicationActivities: nil)
-        return activityVC
+        // Create temporary file with proper name
+        let tempDirectory = FileManager.default.temporaryDirectory
+        let tempURL = tempDirectory.appendingPathComponent(fileName)
+        
+        do {
+            try pdfData.write(to: tempURL)
+            let activityVC = UIActivityViewController(activityItems: [tempURL], applicationActivities: nil)
+            return activityVC
+        } catch {
+            // Fallback to raw data if file write fails
+            let activityVC = UIActivityViewController(activityItems: [pdfData], applicationActivities: nil)
+            return activityVC
+        }
     }
     
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
@@ -1016,39 +1138,82 @@ extension BillScreen {
                 try await db.collection("Data").document("email").setData(["email": email], merge: true)
                 try await db.collection("Data").document("phone").setData(["phone": phone], merge: true)
             }
-            if var purchase = self.purchase {
-                purchase = Purchase(
-                    id: purchase.id,
-                    transactionDate: purchase.transactionDate,
-                    orderNumber: purchase.orderNumber,
-                    subtotal: purchase.subtotal,
-                    gstPercentage: purchase.gstPercentage,
-                    gstAmount: purchase.gstAmount,
-                    pstPercentage: purchase.pstPercentage,
-                    pstAmount: purchase.pstAmount,
-                    adjustmentAmount: purchase.adjustmentAmount,
-                    adjustmentUnit: purchase.adjustmentUnit,
-                    grandTotal: purchase.grandTotal,
-                    notes: purchase.notes,
-                    purchasedPhones: purchase.purchasedPhones,
-                    paymentMethods: purchase.paymentMethods,
-                    supplierName: purchase.supplierName,
-                    supplierAddress: purchase.supplierAddress,
-                    middlemanName: purchase.middlemanName,
-                    middlemanPayment: purchase.middlemanPayment,
-                    supplierPhone: purchase.supplierPhone,
-                    companyAddress: address,
-                    companyEmail: email,
-                    companyPhone: phone
-                )
-                let billGenerator = BillGenerator()
-                let pages = try billGenerator.generateBillHTML(for: purchase)
-                await MainActor.run {
-                    self.purchase = purchase
-                    self.htmlPages = pages
-                    self.htmlContent = pages.first ?? ""
-                    self.currentPage = 0
-                    self.pdfData = nil // regenerate PDF via hidden webview
+            
+            if isSale {
+                // Handle sales invoice regeneration
+                if var sale = self.sale {
+                    sale = Sale(
+                        id: sale.id,
+                        transactionDate: sale.transactionDate,
+                        orderNumber: sale.orderNumber,
+                        subtotal: sale.subtotal,
+                        gstPercentage: sale.gstPercentage,
+                        gstAmount: sale.gstAmount,
+                        pstPercentage: sale.pstPercentage,
+                        pstAmount: sale.pstAmount,
+                        adjustmentAmount: sale.adjustmentAmount,
+                        adjustmentUnit: sale.adjustmentUnit,
+                        grandTotal: sale.grandTotal,
+                        notes: sale.notes,
+                        soldPhones: sale.soldPhones,
+                        services: sale.services,
+                        paymentMethods: sale.paymentMethods,
+                        customerName: sale.customerName,
+                        customerAddress: sale.customerAddress,
+                        middlemanName: sale.middlemanName,
+                        middlemanPayment: sale.middlemanPayment,
+                        customerPhone: sale.customerPhone,
+                        companyAddress: address,
+                        companyEmail: email,
+                        companyPhone: phone
+                    )
+                    let billGenerator = BillGenerator()
+                    let pages = try billGenerator.generateSalesInvoiceHTML(for: sale)
+                    await MainActor.run {
+                        self.sale = sale
+                        self.htmlPages = pages
+                        self.htmlContent = pages.first ?? ""
+                        self.currentPage = 0
+                        self.pdfData = nil // regenerate PDF via hidden webview
+                    }
+                }
+            } else {
+                // Handle purchase invoice regeneration
+                if var purchase = self.purchase {
+                    purchase = Purchase(
+                        id: purchase.id,
+                        transactionDate: purchase.transactionDate,
+                        orderNumber: purchase.orderNumber,
+                        subtotal: purchase.subtotal,
+                        gstPercentage: purchase.gstPercentage,
+                        gstAmount: purchase.gstAmount,
+                        pstPercentage: purchase.pstPercentage,
+                        pstAmount: purchase.pstAmount,
+                        adjustmentAmount: purchase.adjustmentAmount,
+                        adjustmentUnit: purchase.adjustmentUnit,
+                        grandTotal: purchase.grandTotal,
+                        notes: purchase.notes,
+                        purchasedPhones: purchase.purchasedPhones,
+                        services: purchase.services,
+                        paymentMethods: purchase.paymentMethods,
+                        supplierName: purchase.supplierName,
+                        supplierAddress: purchase.supplierAddress,
+                        middlemanName: purchase.middlemanName,
+                        middlemanPayment: purchase.middlemanPayment,
+                        supplierPhone: purchase.supplierPhone,
+                        companyAddress: address,
+                        companyEmail: email,
+                        companyPhone: phone
+                    )
+                    let billGenerator = BillGenerator()
+                    let pages = try billGenerator.generateBillHTML(for: purchase)
+                    await MainActor.run {
+                        self.purchase = purchase
+                        self.htmlPages = pages
+                        self.htmlContent = pages.first ?? ""
+                        self.currentPage = 0
+                        self.pdfData = nil // regenerate PDF via hidden webview
+                    }
                 }
             }
         } catch {
@@ -1072,6 +1237,7 @@ struct Purchase {
     let grandTotal: Double
     let notes: String
     let purchasedPhones: [[String: Any]]
+    let services: [[String: Any]]
     let paymentMethods: [String: Any]
     let supplierName: String?
     let supplierAddress: String?
@@ -1100,6 +1266,7 @@ struct Purchase {
             throw PurchaseError.invalidData
         }
         
+        let services = data["services"] as? [[String: Any]] ?? []
         let supplierName = data["supplierName"] as? String
         let supplierAddress = data["supplierAddress"] as? String
         let middlemanName = data["middlemanName"] as? String
@@ -1119,6 +1286,7 @@ struct Purchase {
             grandTotal: grandTotal,
             notes: notes,
             purchasedPhones: purchasedPhones,
+            services: services,
             paymentMethods: paymentMethods,
             supplierName: supplierName,
             supplierAddress: supplierAddress,
@@ -1135,6 +1303,87 @@ struct Purchase {
 enum PurchaseError: Error {
     case invalidData
     case firestoreError(String)
+}
+
+// Sales struct - similar to Purchase but for sales transactions
+struct Sale {
+    let id: String
+    let transactionDate: Date
+    let orderNumber: Int
+    let subtotal: Double
+    let gstPercentage: Double
+    let gstAmount: Double
+    let pstPercentage: Double
+    let pstAmount: Double
+    let adjustmentAmount: Double
+    let adjustmentUnit: String
+    let grandTotal: Double
+    let notes: String
+    let soldPhones: [[String: Any]]
+    let services: [[String: Any]]
+    let paymentMethods: [String: Any]
+    let customerName: String?
+    let customerAddress: String?
+    let middlemanName: String?
+    let middlemanPayment: [String: Any]?
+    let customerPhone: String?
+    let companyAddress: String?
+    let companyEmail: String?
+    let companyPhone: String?
+    
+    static func fromFirestore(data: [String: Any], id: String) throws -> Sale {
+        guard let transactionDate = (data["transactionDate"] as? Timestamp)?.dateValue(),
+              let orderNumber = data["orderNumber"] as? Int,
+              let subtotal = data["subtotal"] as? Double,
+              let gstPercentage = data["gstPercentage"] as? Double,
+              let gstAmount = data["gstAmount"] as? Double,
+              let pstPercentage = data["pstPercentage"] as? Double,
+              let pstAmount = data["pstAmount"] as? Double,
+              let adjustmentAmount = data["adjustmentAmount"] as? Double,
+              let adjustmentUnit = data["adjustmentUnit"] as? String,
+              let grandTotal = data["grandTotal"] as? Double,
+              let notes = data["notes"] as? String,
+              let soldPhones = data["soldPhones"] as? [[String: Any]],
+              let paymentMethods = data["paymentMethods"] as? [String: Any] else {
+            throw PurchaseError.invalidData
+        }
+        
+        let services = data["services"] as? [[String: Any]] ?? []
+        let customerName = data["customerName"] as? String
+        let customerAddress = data["customerAddress"] as? String
+        let middlemanName = data["middlemanName"] as? String
+        let middlemanPayment = data["middlemanPayment"] as? [String: Any]
+        let customerPhone = data["customerPhone"] as? String
+        let companyAddress = data["companyAddress"] as? String
+        let companyEmail = data["companyEmail"] as? String
+        let companyPhone = data["companyPhone"] as? String
+        
+        return Sale(
+            id: id,
+            transactionDate: transactionDate,
+            orderNumber: orderNumber,
+            subtotal: subtotal,
+            gstPercentage: gstPercentage,
+            gstAmount: gstAmount,
+            pstPercentage: pstPercentage,
+            pstAmount: pstAmount,
+            adjustmentAmount: adjustmentAmount,
+            adjustmentUnit: adjustmentUnit,
+            grandTotal: grandTotal,
+            notes: notes,
+            soldPhones: soldPhones,
+            services: services,
+            paymentMethods: paymentMethods,
+            customerName: customerName,
+            customerAddress: customerAddress,
+            middlemanName: middlemanName,
+            middlemanPayment: middlemanPayment,
+            customerPhone: customerPhone,
+            companyAddress: companyAddress,
+            companyEmail: companyEmail,
+            companyPhone: companyPhone
+        )
+    }
 }
 
 #Preview {

@@ -17,26 +17,11 @@ struct SalesAddProductDialog: View {
     @Binding var isPresented: Bool
     let onDismiss: (() -> Void)?
     let onSave: (([PhoneItem]) -> Void)?
+    var existingCartItems: [PhoneItem] = [] // IMEIs already in cart to exclude
     
-    // Brand dropdown state
-    @State private var brandSearchText = ""
-    @State private var selectedBrand = ""
-    @State private var showingBrandDropdown = false
-    @State private var brandButtonFrame: CGRect = .zero
-    @State private var phoneBrands: [String] = []
-    @State private var isLoadingBrands = false
-    @FocusState private var isBrandFocused: Bool
-    @State private var brandInternalSearchText = ""
-    
-    // Model dropdown state
-    @State private var modelSearchText = ""
-    @State private var selectedModel = ""
-    @State private var showingModelDropdown = false
-    @State private var modelButtonFrame: CGRect = .zero
-    @State private var phoneModels: [String] = []
-    @State private var isLoadingModels = false
-    @FocusState private var isModelFocused: Bool
-    @State private var modelInternalSearchText = ""
+    // Brand and Model data (fetched from all phones)
+    @State private var allBrands: [String] = []
+    @State private var allModels: [String] = []
     
     // Storage Location dropdown state
     @State private var storageLocationSearchText = ""
@@ -53,6 +38,8 @@ struct SalesAddProductDialog: View {
     @State private var storageLocationInternalSearchText = ""
     
     // Table filtering state
+    @State private var selectedBrand: String = ""
+    @State private var selectedModel: String = ""
     @State private var selectedCapacity: String = ""
     @State private var selectedColor: String = ""
     @State private var selectedIMEIs: Set<String> = []
@@ -60,6 +47,7 @@ struct SalesAddProductDialog: View {
     @State private var filteredDevices: [DeviceInfo] = []
     @State private var allDevices: [DeviceInfo] = []
     @State private var isLoadingDevices = false
+    @State private var isLoadingAllPhones = false
     
     // Loading and confirmation states
     @State private var showingConfirmation = false
@@ -86,6 +74,8 @@ struct SalesAddProductDialog: View {
     // Device info structure
     struct DeviceInfo: Identifiable, Hashable {
         let id = UUID()
+        let brand: String
+        let model: String
         let capacity: String
         let capacityUnit: String
         let color: String
@@ -93,6 +83,7 @@ struct SalesAddProductDialog: View {
         let carrier: String
         let status: String
         let unitPrice: Double
+        let storageLocation: String
         
         func hash(into hasher: inout Hasher) {
             hasher.combine(imei)
@@ -124,9 +115,7 @@ struct SalesAddProductDialog: View {
     
     // Check if form has any data
     private var hasFormData: Bool {
-        return !selectedBrand.isEmpty ||
-               !selectedModel.isEmpty ||
-               !selectedStorageLocation.isEmpty ||
+        return !selectedStorageLocation.isEmpty ||
                !selectedIMEIs.isEmpty
     }
     
@@ -134,9 +123,7 @@ struct SalesAddProductDialog: View {
     private var isAddEnabled: Bool {
         switch currentStep {
         case .imeiSelection:
-            return !selectedBrand.isEmpty &&
-                   !selectedModel.isEmpty &&
-                   !selectedStorageLocation.isEmpty &&
+            return !selectedStorageLocation.isEmpty &&
                    !selectedIMEIs.isEmpty
         case .priceSetting:
             // All selected devices must have selling prices set
@@ -152,12 +139,26 @@ struct SalesAddProductDialog: View {
         return currentStep == .imeiSelection && !selectedIMEIs.isEmpty
     }
     
+    // Get IMEIs that are already in the cart
+    private var cartIMEIs: Set<String> {
+        Set(existingCartItems.flatMap { $0.imeis })
+    }
+    
     private var backgroundColor: Color {
         #if os(macOS)
         return Color(NSColor.windowBackgroundColor)
         #else
         return Color(.systemBackground)
         #endif
+    }
+    
+    // Computed property to get phone counts by location
+    private var phoneCountsByLocation: [String: Int] {
+        var counts: [String: Int] = [:]
+        for device in allDevices {
+            counts[device.storageLocation, default: 0] += 1
+        }
+        return counts
     }
     
     var body: some View {
@@ -169,110 +170,149 @@ struct SalesAddProductDialog: View {
     }
     
     var iPhoneDialogView: some View {
-        ZStack {
-            // Background
-            LinearGradient(
-                gradient: Gradient(colors: [backgroundGradientColor, secondaryGradientColor]),
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-            
-            NavigationView {
-                    VStack(spacing: 0) {
-                    // Fixed Header
-                        VStack(spacing: 16) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text("Add Product to Sale")
-                                        .font(.largeTitle)
-                                        .fontWeight(.bold)
-                                        .foregroundColor(.primary)
-                                    
-                                    Text("Select brand, model, and location to view available devices")
-                                        .font(.subheadline)
-                                        .foregroundColor(.secondary)
-                                }
-                                Spacer()
-                            }
-                            .padding(.horizontal, 24)
-                            .padding(.top, 20)
-                        }
-                        .padding(.bottom, 32)
-                        
-                    // Fixed Dropdown Row
-                        VStack(spacing: 28) {
-                            iPhoneFormFields
-                        }
-                        .padding(.horizontal, 24)
-                    .padding(.bottom, 20)
-                    
-                    Divider()
-                        .padding(.horizontal, 24)
-                    
-                    // Fixed Table Area - fills remaining space
+        NavigationStack {
+            ZStack {
+                // Background
+                LinearGradient(
+                    gradient: Gradient(colors: [backgroundGradientColor, secondaryGradientColor]),
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+                
+                VStack(spacing: 0) {
                     if currentStep == .imeiSelection {
-                        if !selectedBrand.isEmpty && !selectedModel.isEmpty && !selectedStorageLocation.isEmpty {
-                            if isLoadingDevices {
-                                // Loading indicator
-                                VStack {
-                                    Spacer()
-                                    ProgressView()
-                                        .scaleEffect(1.5)
-                                        .padding(.bottom, 12)
-                                    Text("Loading devices...")
-                                        .font(.subheadline)
-                                        .foregroundColor(.secondary)
-                                    Spacer()
-                                }
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            } else if !filteredDevices.isEmpty {
-                                DeviceFilteringTable(
-                                    devices: $filteredDevices,
-                                    selectedCapacity: $selectedCapacity,
-                                    selectedColor: $selectedColor,
-                                    selectedIMEIs: $selectedIMEIs,
-                                    showActiveOnly: $showActiveOnly
+                        // Storage location dropdown at top
+                        VStack(spacing: 0) {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("Storage Location")
+                                    .font(.headline)
+                                    .foregroundColor(.primary)
+                                    .padding(.horizontal, 20)
+                                    .padding(.top, 16)
+                                
+                                StorageLocationDropdownField(
+                                    searchText: $storageLocationSearchText,
+                                    selectedStorageLocation: $selectedStorageLocation,
+                                    showingDropdown: $showingStorageLocationDropdown,
+                                    buttonFrame: $storageLocationButtonFrame,
+                                    storageLocations: storageLocations,
+                                    phoneCounts: phoneCountsByLocation,
+                                    isLoading: isLoadingStorageLocations,
+                                    isFocused: $isStorageLocationFocused,
+                                    internalSearchText: $storageLocationInternalSearchText,
+                                    isAddingStorageLocation: $isAddingStorageLocation,
+                                    isEnabled: true,
+                                    onAddStorageLocation: addNewStorageLocation,
+                                    onStorageLocationSelected: { location in
+                                        selectedStorageLocation = location
+                                        storageLocationSearchText = location
+                                        filterDevicesByStorageLocation()
+                                    }
                                 )
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                .padding(.horizontal, 24)
-                                .padding(.bottom, 24)
-                                .transition(.asymmetric(
-                                    insertion: .opacity.combined(with: .move(edge: .trailing)),
-                                    removal: .opacity.combined(with: .move(edge: .leading))
-                                ))
+                                .padding(.horizontal, 20)
+                                
+                                // Inline dropdown for iOS (iPhone only)
+                                #if os(iOS)
+                                if showingStorageLocationDropdown && UIDevice.current.userInterfaceIdiom == .phone {
+                                    SalesStorageLocationDropdownOverlay(
+                                        isOpen: $showingStorageLocationDropdown,
+                                        selectedStorageLocation: $selectedStorageLocation,
+                                        searchText: $storageLocationSearchText,
+                                        internalSearchText: $storageLocationInternalSearchText,
+                                        storageLocations: storageLocations,
+                                        phoneCounts: phoneCountsByLocation,
+                                        buttonFrame: storageLocationButtonFrame,
+                                        onAddStorageLocation: addNewStorageLocation,
+                                        onRenameStorageLocation: { _, _ in },
+                                        onStorageLocationSelected: { location in
+                                            selectedStorageLocation = location
+                                            storageLocationSearchText = location
+                                            filterDevicesByStorageLocation()
+                                        }
+                                    )
+                                    .padding(.horizontal, 20)
+                                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                                }
+                                #endif
+                            }
+                            .padding(.bottom, 16)
+                            
+                            Divider()
+                            
+                            // Filtering rows and device list
+                            if !selectedStorageLocation.isEmpty {
+                                if isLoadingDevices {
+                                    // Loading indicator
+                                    VStack {
+                                        Spacer()
+                                        ProgressView()
+                                            .scaleEffect(1.5)
+                                        Text("Loading devices...")
+                                            .font(.system(size: 16, weight: .medium))
+                                            .foregroundColor(.secondary)
+                                            .padding(.top, 16)
+                                        Spacer()
+                                    }
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                } else if filteredDevices.isEmpty {
+                                    // No devices found
+                                    VStack {
+                                        Spacer()
+                                        Image(systemName: "exclamationmark.triangle")
+                                            .font(.system(size: 48))
+                                            .foregroundColor(.orange)
+                                        Text("No devices found")
+                                            .font(.title2)
+                                            .fontWeight(.semibold)
+                                            .padding(.top, 16)
+                                        Text("Try selecting different options")
+                                            .font(.body)
+                                            .foregroundColor(.secondary)
+                                            .padding(.top, 8)
+                                        Spacer()
+                                    }
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                } else {
+                                    // Mobile filtering interface
+                                    MobileDeviceFilteringTable(
+                                        devices: $filteredDevices,
+                                        selectedBrand: $selectedBrand,
+                                        selectedModel: $selectedModel,
+                                        selectedCapacity: $selectedCapacity,
+                                        selectedColor: $selectedColor,
+                                        selectedIMEIs: $selectedIMEIs,
+                                        showActiveOnly: $showActiveOnly,
+                                        cartIMEIs: cartIMEIs
+                                    )
+                                }
                             } else {
-                                // No devices found
+                                // Placeholder when storage location is not selected
                                 VStack {
                                     Spacer()
-                                    Text("No devices found")
-                                        .font(.subheadline)
+                                    Image(systemName: "location.fill")
+                                        .font(.system(size: 48))
                                         .foregroundColor(.secondary)
+                                    Text("Select storage location")
+                                        .font(.title2)
+                                        .fontWeight(.semibold)
+                                        .padding(.top, 16)
+                                    Text("to view available devices")
+                                        .font(.body)
+                                        .foregroundColor(.secondary)
+                                        .padding(.top, 8)
                                     Spacer()
                                 }
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                             }
-                        } else {
-                            // Placeholder when no data
-                            VStack {
-                                Spacer()
-                                Text("Select brand, model, and storage location to view devices")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                                Spacer()
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                         }
-                    } else {
-                        // Price setting interface
+                    } else if currentStep == .priceSetting {
+                        // Price setting view
                         PriceSettingInterface(
                             selectedDevices: selectedDevicesForPricing,
                             deviceSellingPrices: $deviceSellingPrices,
                             deviceProfitLoss: $deviceProfitLoss
                         )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.horizontal, 24)
-                        .padding(.bottom, 24)
                         .transition(.asymmetric(
                             insertion: .opacity.combined(with: .move(edge: .trailing)),
                             removal: .opacity.combined(with: .move(edge: .leading))
@@ -280,12 +320,23 @@ struct SalesAddProductDialog: View {
                     }
                 }
             }
+            .navigationTitle("Add Product to Sale")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        handleCloseAction()
+                    if currentStep == .priceSetting {
+                        Button("Previous") {
+                            goBackToImeiSelection()
+                        }
+                        .font(.system(size: 17, weight: .regular))
+                        .foregroundColor(.blue)
+                    } else {
+                        Button("Cancel") {
+                            handleCloseAction()
+                        }
+                        .font(.system(size: 17, weight: .regular))
+                        .foregroundColor(.blue)
                     }
                 }
                 
@@ -295,11 +346,26 @@ struct SalesAddProductDialog: View {
                             proceedToPriceSetting()
                         }
                         .disabled(!isNextEnabled)
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundColor(.blue)
                     } else {
                         Button("Add") {
                             addProducts()
                         }
                         .disabled(!isAddEnabled)
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundColor(.blue)
+                    }
+                }
+                
+                if currentStep == .priceSetting {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button("Done") {
+                            #if os(iOS)
+                            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                            #endif
+                        }
                     }
                 }
             }
@@ -319,7 +385,7 @@ struct SalesAddProductDialog: View {
             }
         }
         .onAppear {
-            fetchPhoneBrands()
+            fetchAllPhonesAndStorageLocations()
         }
     }
     
@@ -363,7 +429,7 @@ struct SalesAddProductDialog: View {
                 
                 // Fixed Table Area - fills remaining space
                 if currentStep == .imeiSelection {
-                    if !selectedBrand.isEmpty && !selectedModel.isEmpty && !selectedStorageLocation.isEmpty {
+                    if !selectedStorageLocation.isEmpty {
                         if isLoadingDevices {
                             // Loading indicator
                             VStack {
@@ -380,10 +446,13 @@ struct SalesAddProductDialog: View {
                         } else if !filteredDevices.isEmpty {
                             DeviceFilteringTable(
                                 devices: $filteredDevices,
+                                        selectedBrand: $selectedBrand,
+                                        selectedModel: $selectedModel,
                                 selectedCapacity: $selectedCapacity,
                                 selectedColor: $selectedColor,
                                 selectedIMEIs: $selectedIMEIs,
-                                showActiveOnly: $showActiveOnly
+                                showActiveOnly: $showActiveOnly,
+                                cartIMEIs: cartIMEIs
                             )
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .padding(.horizontal, 24)
@@ -404,10 +473,10 @@ struct SalesAddProductDialog: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                         }
                     } else {
-                        // Placeholder when no data
+                        // Placeholder when storage location is not selected
                         VStack {
                             Spacer()
-                            Text("Select brand, model, and storage location to view devices")
+                            Text("Select storage location to view devices")
                                 .font(.subheadline)
                                 .foregroundColor(.secondary)
                             Spacer()
@@ -470,8 +539,6 @@ struct SalesAddProductDialog: View {
             .cornerRadius(12)
             .shadow(radius: 20)
         }
-        .overlay(desktopBrandDropdownOverlay)
-        .overlay(desktopModelDropdownOverlay)
         .overlay(desktopStorageLocationDropdownOverlay)
         .confirmationDialog("Close without saving?", isPresented: $showingCloseConfirmation) {
             Button("Discard Changes", role: .destructive) {
@@ -488,95 +555,11 @@ struct SalesAddProductDialog: View {
         }
         .onAppear {
             print("DesktopDialogView appeared")
-            fetchPhoneBrands()
-        }
-        .onChange(of: selectedBrand) { newBrand in
-            print("selectedBrand changed to: '\(newBrand)'")
-        }
-        .onChange(of: phoneModels) { newModels in
-            print("phoneModels changed - count: \(newModels.count), models: \(newModels)")
+            fetchAllPhonesAndStorageLocations()
         }
     }
     
     // MARK: - Desktop Dropdown Overlays
-    private var desktopBrandDropdownOverlay: some View {
-        Group {
-            #if os(macOS)
-            if showingBrandDropdown {
-                SalesBrandDropdownOverlay(
-                    isOpen: $showingBrandDropdown,
-                    selectedBrand: $selectedBrand,
-                    searchText: $brandSearchText,
-                    internalSearchText: $brandInternalSearchText,
-                    brands: phoneBrands,
-                    buttonFrame: brandButtonFrame,
-                    onAddBrand: { brandName in
-                        addNewBrand(brandName)
-                    },
-                    onRenameBrand: { oldName, newName in
-                        // TODO: Implement rename functionality if needed
-                    },
-                    onBrandSelected: { brand in
-                        selectedBrand = brand
-                        brandSearchText = brand
-                        selectedModel = ""
-                        modelSearchText = ""
-                        selectedStorageLocation = ""
-                        storageLocationSearchText = ""
-                        storageLocationIdToName = [:]
-                        capacityIdToName = [:]
-                        colorIdToName = [:]
-                        carrierIdToName = [:]
-                        filteredDevices = []
-                        allDevices = []
-                        selectedCapacity = ""
-                        selectedColor = ""
-                        selectedIMEIs.removeAll()
-                        print("About to call fetchPhoneModels for brand: \(brand)")
-                        fetchPhoneModels()
-                    }
-                )
-            }
-            #endif
-        }
-    }
-    
-    private var desktopModelDropdownOverlay: some View {
-        Group {
-            #if os(macOS)
-            if showingModelDropdown {
-                SalesModelDropdownOverlay(
-                    isOpen: $showingModelDropdown,
-                    selectedModel: $selectedModel,
-                    models: phoneModels,
-                    buttonFrame: modelButtonFrame,
-                    searchText: $modelSearchText,
-                    internalSearchText: $modelInternalSearchText,
-                    isAddingModel: $isAddingModel,
-                    onAddModel: addNewModel,
-                    onModelSelected: { model in
-                        print("Model selected (Desktop): \(model)")
-                        selectedModel = model
-                        modelSearchText = model
-                        selectedStorageLocation = ""
-                        storageLocationSearchText = ""
-                        storageLocationIdToName = [:]
-                        capacityIdToName = [:]
-                        colorIdToName = [:]
-                        carrierIdToName = [:]
-                        filteredDevices = []
-                        allDevices = []
-                        selectedCapacity = ""
-                        selectedColor = ""
-                        selectedIMEIs.removeAll()
-                        print("About to call fetchStorageLocations for model: \(model)")
-                        fetchStorageLocations()
-                    }
-                )
-            }
-            #endif
-        }
-    }
     
     private var desktopStorageLocationDropdownOverlay: some View {
         Group {
@@ -588,6 +571,7 @@ struct SalesAddProductDialog: View {
                     searchText: $storageLocationSearchText,
                     internalSearchText: $storageLocationInternalSearchText,
                     storageLocations: storageLocations,
+                    phoneCounts: phoneCountsByLocation,
                     buttonFrame: storageLocationButtonFrame,
                     onAddStorageLocation: addNewStorageLocation,
                     onRenameStorageLocation: { oldName, newName in
@@ -596,7 +580,7 @@ struct SalesAddProductDialog: View {
                     onStorageLocationSelected: { location in
                         selectedStorageLocation = location
                         storageLocationSearchText = location
-                        loadDevices()
+                        filterDevicesByStorageLocation()
                     }
                 )
             }
@@ -604,172 +588,39 @@ struct SalesAddProductDialog: View {
         }
     }
     
-    // MARK: - iPhone Form Fields
-    var iPhoneFormFields: some View {
-        VStack(spacing: 28) {
-            // Brand dropdown
-            BrandDropdownField(
-                searchText: $brandSearchText,
-                selectedBrand: $selectedBrand,
-                showingDropdown: $showingBrandDropdown,
-                buttonFrame: $brandButtonFrame,
-                brands: phoneBrands,
-                isLoading: isLoadingBrands,
-                isFocused: $isBrandFocused,
-                internalSearchText: $brandInternalSearchText,
-                isAddingBrand: $isAddingBrand,
-                onAddBrand: addNewBrand,
-                onBrandSelected: { brand in
-                    print("Brand selected: \(brand)")
-                    selectedBrand = brand
-                    brandSearchText = brand
-                    selectedModel = ""
-                    modelSearchText = ""
-                    selectedStorageLocation = ""
-                    storageLocationSearchText = ""
-                    storageLocationIdToName = [:]
-                    filteredDevices = []
-                    allDevices = []
-                    selectedCapacity = ""
-                    selectedColor = ""
-                    selectedIMEIs.removeAll()
-                    print("About to call fetchPhoneModels for brand: \(brand)")
-                    fetchPhoneModels()
-                }
-            )
-            
-            // Model dropdown
-            ModelDropdownField(
-                searchText: $modelSearchText,
-                selectedModel: $selectedModel,
-                showingDropdown: $showingModelDropdown,
-                buttonFrame: $modelButtonFrame,
-                models: phoneModels,
-                isLoading: isLoadingModels,
-                isFocused: $isModelFocused,
-                internalSearchText: $modelInternalSearchText,
-                isAddingModel: $isAddingModel,
-                isEnabled: !selectedBrand.isEmpty,
-                onAddModel: addNewModel,
-                onModelSelected: { model in
-                    selectedModel = model
-                    modelSearchText = model
-                    selectedStorageLocation = ""
-                    storageLocationSearchText = ""
-                    storageLocationIdToName = [:]
-                    filteredDevices = []
-                    allDevices = []
-                    selectedCapacity = ""
-                    selectedColor = ""
-                    selectedIMEIs.removeAll()
-                    fetchStorageLocations()
-                }
-            )
-            
-            // Storage Location dropdown
-            StorageLocationDropdownField(
-                searchText: $storageLocationSearchText,
-                selectedStorageLocation: $selectedStorageLocation,
-                showingDropdown: $showingStorageLocationDropdown,
-                buttonFrame: $storageLocationButtonFrame,
-                storageLocations: storageLocations,
-                isLoading: isLoadingStorageLocations,
-                isFocused: $isStorageLocationFocused,
-                internalSearchText: $storageLocationInternalSearchText,
-                isAddingStorageLocation: $isAddingStorageLocation,
-                isEnabled: !selectedBrand.isEmpty && !selectedModel.isEmpty,
-                onAddStorageLocation: addNewStorageLocation,
-                onStorageLocationSelected: { location in
-                    selectedStorageLocation = location
-                    storageLocationSearchText = location
-                    loadDevices()
-                }
-            )
+    // MARK: - iPhone Dropdown Overlay
+    
+    private var iPhoneStorageLocationDropdownOverlay: some View {
+        Group {
+            #if os(iOS)
+            if showingStorageLocationDropdown {
+                SalesStorageLocationDropdownOverlay(
+                    isOpen: $showingStorageLocationDropdown,
+                    selectedStorageLocation: $selectedStorageLocation,
+                    searchText: $storageLocationSearchText,
+                    internalSearchText: $storageLocationInternalSearchText,
+                    storageLocations: storageLocations,
+                    phoneCounts: phoneCountsByLocation,
+                    buttonFrame: storageLocationButtonFrame,
+                    onAddStorageLocation: addNewStorageLocation,
+                    onRenameStorageLocation: { oldName, newName in
+                        // TODO: Implement rename functionality if needed
+                    },
+                    onStorageLocationSelected: { location in
+                        selectedStorageLocation = location
+                        storageLocationSearchText = location
+                        filterDevicesByStorageLocation()
+                    }
+                )
+            }
+            #endif
         }
     }
+    
     
     // MARK: - Desktop Form Fields
     var DesktopFormFields: some View {
         VStack(spacing: 24) {
-            // Top row with brand, model, location
-            HStack(spacing: 16) {
-                // Brand dropdown
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Brand")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-                    
-                    BrandDropdownField(
-                        searchText: $brandSearchText,
-                        selectedBrand: $selectedBrand,
-                        showingDropdown: $showingBrandDropdown,
-                        buttonFrame: $brandButtonFrame,
-                        brands: phoneBrands,
-                        isLoading: isLoadingBrands,
-                        isFocused: $isBrandFocused,
-                        internalSearchText: $brandInternalSearchText,
-                        isAddingBrand: $isAddingBrand,
-                        onAddBrand: addNewBrand,
-                        onBrandSelected: { brand in
-                            print("Brand selected (iPhone): \(brand)")
-                            selectedBrand = brand
-                            brandSearchText = brand
-                            selectedModel = ""
-                            modelSearchText = ""
-                            selectedStorageLocation = ""
-                            storageLocationSearchText = ""
-                            storageLocationIdToName = [:]
-                        capacityIdToName = [:]
-                        colorIdToName = [:]
-                        carrierIdToName = [:]
-                            filteredDevices = []
-                            allDevices = []
-                            selectedCapacity = ""
-                            selectedColor = ""
-                            selectedIMEIs.removeAll()
-                            print("About to call fetchPhoneModels for brand (iPhone): \(brand)")
-                            fetchPhoneModels()
-                        }
-                    )
-                }
-                
-                // Model dropdown
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Model")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-                    
-                    ModelDropdownField(
-                        searchText: $modelSearchText,
-                        selectedModel: $selectedModel,
-                        showingDropdown: $showingModelDropdown,
-                        buttonFrame: $modelButtonFrame,
-                        models: phoneModels,
-                        isLoading: isLoadingModels,
-                        isFocused: $isModelFocused,
-                        internalSearchText: $modelInternalSearchText,
-                        isAddingModel: $isAddingModel,
-                        isEnabled: !selectedBrand.isEmpty,
-                        onAddModel: addNewModel,
-                        onModelSelected: { model in
-                            selectedModel = model
-                            modelSearchText = model
-                            selectedStorageLocation = ""
-                            storageLocationSearchText = ""
-                            storageLocationIdToName = [:]
-                        capacityIdToName = [:]
-                        colorIdToName = [:]
-                        carrierIdToName = [:]
-                            filteredDevices = []
-                            allDevices = []
-                            selectedCapacity = ""
-                            selectedColor = ""
-                            selectedIMEIs.removeAll()
-                            fetchStorageLocations()
-                        }
-                    )
-                }
-                
                 // Storage Location dropdown
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Storage Location")
@@ -782,19 +633,19 @@ struct SalesAddProductDialog: View {
                         showingDropdown: $showingStorageLocationDropdown,
                         buttonFrame: $storageLocationButtonFrame,
                         storageLocations: storageLocations,
+                        phoneCounts: phoneCountsByLocation,
                         isLoading: isLoadingStorageLocations,
                         isFocused: $isStorageLocationFocused,
                         internalSearchText: $storageLocationInternalSearchText,
                         isAddingStorageLocation: $isAddingStorageLocation,
-                        isEnabled: !selectedBrand.isEmpty && !selectedModel.isEmpty,
+                    isEnabled: true,
                         onAddStorageLocation: addNewStorageLocation,
                         onStorageLocationSelected: { location in
                             selectedStorageLocation = location
                             storageLocationSearchText = location
-                            loadDevices()
+                        filterDevicesByStorageLocation()
                         }
                     )
-                }
             }
         }
     }
@@ -803,8 +654,14 @@ struct SalesAddProductDialog: View {
     
     private var shouldShowiPhoneDialog: Bool {
         #if os(iOS)
-        print("Platform: iOS - showing iPhone dialog")
-        return true
+        // Only show mobile UI on iPhone, iPad uses desktop UI
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            print("Platform: iPhone - showing iPhone dialog")
+            return true
+        } else {
+            print("Platform: iPad - showing Desktop dialog")
+            return false
+        }
         #else
         print("Platform: macOS - showing Desktop dialog")
         return false
@@ -860,16 +717,17 @@ struct SalesAddProductDialog: View {
             let sellingPrice = Double(sellingPriceString) ?? 0.0
             
             let item = PhoneItem(
-                brand: selectedBrand,
-                model: selectedModel,
+                brand: device.brand,      // Use device's own brand from fetched data
+                model: device.model,      // Use device's own model from fetched data
                 capacity: device.capacity,
                 capacityUnit: device.capacityUnit,
                 color: device.color,
                 carrier: device.carrier,
                 status: device.status, // Use actual device status from database
-                storageLocation: selectedStorageLocation,
+                storageLocation: device.storageLocation, // Use device's own storage location
                 imeis: [device.imei],
-                unitCost: sellingPrice // Use selling price as unitCost for sales
+                unitCost: sellingPrice, // Use selling price as unitCost for sales
+                actualCost: device.unitPrice // Store actual purchase cost from phone document
             )
             items.append(item)
         }
@@ -878,88 +736,335 @@ struct SalesAddProductDialog: View {
         closeDialog()
     }
     
-    // MARK: - Data Loading Methods (using same patterns as AddProductDialog)
+    // MARK: - Data Loading Methods
     
-    private func fetchPhoneBrands() {
-        isLoadingBrands = true
+    private func fetchAllPhonesAndStorageLocations() {
+        isLoadingAllPhones = true
         let db = Firestore.firestore()
         
+        // Use DispatchGroup to fetch all reference collections in parallel
+        let dispatchGroup = DispatchGroup()
+        
+        var storageLocationIdToName: [String: String] = [:]
+        var colorIdToName: [String: String] = [:]
+        var carrierIdToName: [String: String] = [:]
+        
+        // Fetch StorageLocations
+        dispatchGroup.enter()
+        db.collection("StorageLocations").getDocuments { snapshot, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    print("Error fetching storage locations: \(error)")
+                } else if let documents = snapshot?.documents {
+                    let locationNames = documents.compactMap { document in
+                        document.data()["storageLocation"] as? String
+                    }
+                    self.storageLocations = locationNames.sorted()
+                    print("Fetched \(locationNames.count) storage locations: \(locationNames)")
+                    
+                    // Create the ID-to-name mapping for storage locations
+                    for document in documents {
+                        if let locationName = document.data()["storageLocation"] as? String {
+                            storageLocationIdToName[document.documentID] = locationName
+                        }
+                    }
+                    print("Created storage location mapping: \(storageLocationIdToName)")
+                }
+                dispatchGroup.leave()
+            }
+        }
+        
+        // Fetch Colors
+        dispatchGroup.enter()
+        db.collection("Colors").getDocuments { snapshot, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    print("Error fetching colors: \(error)")
+                } else if let documents = snapshot?.documents {
+                    for document in documents {
+                        if let colorName = document.data()["name"] as? String {
+                            colorIdToName[document.documentID] = colorName
+                        }
+                    }
+                    print("Created color mapping: \(colorIdToName)")
+                }
+                dispatchGroup.leave()
+            }
+        }
+        
+        // Fetch Carriers
+        dispatchGroup.enter()
+        db.collection("Carriers").getDocuments { snapshot, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    print("Error fetching carriers: \(error)")
+                } else if let documents = snapshot?.documents {
+                    for document in documents {
+                        if let carrierName = document.data()["name"] as? String {
+                            carrierIdToName[document.documentID] = carrierName
+                        }
+                    }
+                    print("Created carrier mapping: \(carrierIdToName)")
+                }
+                dispatchGroup.leave()
+            }
+        }
+        
+        // When all reference collections are fetched, proceed with phones
+        dispatchGroup.notify(queue: .main) {
+            // Update the mappings
+            self.storageLocationIdToName = storageLocationIdToName
+            self.colorIdToName = colorIdToName
+            self.carrierIdToName = carrierIdToName
+            
+            // Now fetch all phones from all brands
+            self.fetchAllPhonesFromAllBrands()
+        }
+    }
+    
+    private func fetchAllPhonesFromAllBrands() {
+            let db = Firestore.firestore()
+        
+        // First get all brand documents
         db.collection("PhoneBrands").getDocuments { snapshot, error in
             DispatchQueue.main.async {
-                self.isLoadingBrands = false
-                
                 if let error = error {
                     print("Error fetching phone brands: \(error)")
+                    self.isLoadingAllPhones = false
                     return
                 }
                 
-                guard let documents = snapshot?.documents else { 
-                    print("No documents found in PhoneBrands collection")
+                guard let brandDocuments = snapshot?.documents else {
+                    print("No brand documents found")
+                    self.isLoadingAllPhones = false
                     return 
                 }
                 
-                let brandNames = documents.compactMap { document in
-                    document.data()["brand"] as? String
-                }
-                print("Fetched \(brandNames.count) brands: \(brandNames)")
+                print("Found \(brandDocuments.count) brands, fetching all phones...")
                 
-                self.phoneBrands = brandNames.sorted()
-                print("Sorted brands: \(self.phoneBrands)")
+                let dispatchGroup = DispatchGroup()
+                var allPhones: [QueryDocumentSnapshot] = []
+                var brandIdToName: [String: String] = [:]
+                var modelIdToName: [String: String] = [:]
+                
+                // Process each brand
+                for brandDoc in brandDocuments {
+                    let brandId = brandDoc.documentID
+                    let brandName = brandDoc.data()["brand"] as? String ?? "Unknown"
+                    brandIdToName[brandId] = brandName
+                    
+                    dispatchGroup.enter()
+                    
+                    // Get all models for this brand
+                db.collection("PhoneBrands")
+                        .document(brandId)
+                    .collection("Models")
+                        .getDocuments { modelSnapshot, modelError in
+                            defer { dispatchGroup.leave() }
+                            
+                            if let modelError = modelError {
+                                print("Error fetching models for brand \(brandName): \(modelError)")
+                                return
+                            }
+                            
+                            guard let modelDocuments = modelSnapshot?.documents else {
+                                print("No model documents found for brand \(brandName)")
+                                return
+                            }
+                            
+                            // Process each model
+                            for modelDoc in modelDocuments {
+                                let modelId = modelDoc.documentID
+                                let modelName = modelDoc.data()["model"] as? String ?? "Unknown"
+                                modelIdToName[modelId] = modelName
+                                
+                                dispatchGroup.enter()
+                                
+                                // Get all phones for this model
+                                db.collection("PhoneBrands")
+                                    .document(brandId)
+                                    .collection("Models")
+                                    .document(modelId)
+                                    .collection("Phones")
+                                    .getDocuments { phoneSnapshot, phoneError in
+                                        defer { dispatchGroup.leave() }
+                                        
+                                        if let phoneError = phoneError {
+                                            print("Error fetching phones for model \(modelName): \(phoneError)")
+                                            return
+                                        }
+                                        
+                                        guard let phoneDocuments = phoneSnapshot?.documents else {
+                                            return
+                                        }
+                                        
+                                        // Add phones to the collection
+                                        DispatchQueue.main.async {
+                                            allPhones.append(contentsOf: phoneDocuments)
+                                        }
+                                    }
+                            }
+                        }
+                }
+                
+                // Wait for all fetches to complete
+                dispatchGroup.notify(queue: .main) {
+                    print("Fetched \(allPhones.count) phones from all brands")
+                    self.processAllPhones(allPhones, brandIdToName: brandIdToName, modelIdToName: modelIdToName)
+                }
             }
         }
     }
     
-    private func fetchPhoneModels() {
-        guard !selectedBrand.isEmpty else {
-            print("fetchPhoneModels: No brand selected, clearing models")
-            phoneModels = []
+    private func processAllPhones(_ phoneDocuments: [QueryDocumentSnapshot], brandIdToName: [String: String], modelIdToName: [String: String]) {
+        // Process all phones and create DeviceInfo objects
+        var devices: [DeviceInfo] = []
+        
+        for doc in phoneDocuments {
+            let data = doc.data()
+            guard let imei = data["imei"] as? String else { continue }
+            
+            // Get brand and model from the document path
+            let pathComponents = doc.reference.path.components(separatedBy: "/")
+            let brandId = pathComponents[1] // PhoneBrands/{brandId}
+            let modelId = pathComponents[3] // Models/{modelId}
+            
+            let brandName = brandIdToName[brandId] ?? "Unknown"
+            let modelName = modelIdToName[modelId] ?? "Unknown"
+            
+            // Resolve capacity name
+            var capacityName = "Unknown"
+            if let capacityData = data["capacity"] {
+                if let capacityStr = capacityData as? String {
+                    if capacityStr.hasPrefix("/Capacities/") {
+                        let pathComponents = capacityStr.components(separatedBy: "/")
+                        if pathComponents.count >= 3, let resolvedName = capacityIdToName[pathComponents[2]] {
+                            capacityName = resolvedName
+                        }
+                    } else {
+                        capacityName = capacityStr
+                    }
+                } else if let capacityRef = capacityData as? DocumentReference,
+                          let resolvedName = capacityIdToName[capacityRef.documentID] {
+                    capacityName = resolvedName
+                }
+            }
+            
+            // Resolve color name
+            var colorName = "Unknown"
+            if let colorData = data["color"] {
+                if let colorStr = colorData as? String {
+                    if colorStr.hasPrefix("/Colors/") {
+                        let pathComponents = colorStr.components(separatedBy: "/")
+                        if pathComponents.count >= 3, let resolvedName = colorIdToName[pathComponents[2]] {
+                            colorName = resolvedName
+                        }
+                    } else {
+                        colorName = colorStr
+                    }
+                } else if let colorRef = colorData as? DocumentReference,
+                          let resolvedName = colorIdToName[colorRef.documentID] {
+                    colorName = resolvedName
+                }
+            }
+            
+            // Resolve carrier name
+            var carrierName = "Unknown"
+            if let carrierData = data["carrier"] {
+                if let carrierStr = carrierData as? String {
+                    if carrierStr.hasPrefix("/Carriers/") {
+                        let pathComponents = carrierStr.components(separatedBy: "/")
+                        if pathComponents.count >= 3, let resolvedName = carrierIdToName[pathComponents[2]] {
+                            carrierName = resolvedName
+                        }
+                    } else {
+                        carrierName = carrierStr
+                    }
+                } else if let carrierRef = carrierData as? DocumentReference,
+                          let resolvedName = carrierIdToName[carrierRef.documentID] {
+                    carrierName = resolvedName
+                }
+            }
+            
+            // Resolve storage location name
+            var storageLocationName = "Unknown"
+            if let storageLocationData = data["storageLocation"] {
+                if let storageLocationStr = storageLocationData as? String {
+                    if storageLocationStr.hasPrefix("/StorageLocations/") {
+                        let pathComponents = storageLocationStr.components(separatedBy: "/")
+                        if pathComponents.count >= 3, let resolvedName = storageLocationIdToName[pathComponents[2]] {
+                            storageLocationName = resolvedName
+                        }
+                    } else {
+                        storageLocationName = storageLocationStr
+                    }
+                } else if let storageLocationRef = storageLocationData as? DocumentReference,
+                          let resolvedName = storageLocationIdToName[storageLocationRef.documentID] {
+                    storageLocationName = resolvedName
+                }
+            }
+            
+            print("Debug: Phone IMEI \(imei) - storageLocation data: \(data["storageLocation"] ?? "nil"), resolved name: \(storageLocationName)")
+            
+            // Get other properties
+            let status = data["status"] as? String ?? "Unknown"
+            let capacityUnit = data["capacityUnit"] as? String ?? ""
+            let unitPrice = data["unitCost"] as? Double ?? 0.0
+            
+            let device = DeviceInfo(
+                brand: brandName,
+                model: modelName,
+                capacity: capacityName,
+                capacityUnit: capacityUnit,
+                color: colorName,
+                imei: imei,
+                carrier: carrierName,
+                status: status,
+                unitPrice: unitPrice,
+                storageLocation: storageLocationName
+            )
+            devices.append(device)
+        }
+        
+        // Update state
+        self.allDevices = devices
+        self.allBrands = Array(Set(devices.map { $0.brand })).sorted()
+        self.allModels = Array(Set(devices.map { $0.model })).sorted()
+        self.isLoadingAllPhones = false
+        
+        print("Processed \(devices.count) devices")
+        print("Found \(self.allBrands.count) unique brands: \(self.allBrands)")
+        print("Found \(self.allModels.count) unique models: \(self.allModels)")
+        
+        // Filter devices by selected storage location if one is selected
+        if !self.selectedStorageLocation.isEmpty {
+            self.filterDevicesByStorageLocation()
+        }
+    }
+    
+    private func filterDevicesByStorageLocation() {
+        guard !selectedStorageLocation.isEmpty else {
+            filteredDevices = []
             return
         }
         
-        print("fetchPhoneModels: Starting fetch for brand: \(selectedBrand)")
-        isLoadingModels = true
-        let brandName = selectedBrand
+        print("Debug: Filtering \(allDevices.count) devices for storage location: '\(selectedStorageLocation)'")
+        print("Debug: Available storage locations in devices: \(Set(allDevices.map { $0.storageLocation }))")
         
-        getBrandDocumentId(for: brandName) { brandDocId in
-            let db = Firestore.firestore()
-            DispatchQueue.main.async {
-                guard let brandDocId = brandDocId else {
-                    print("fetchPhoneModels: No brand document ID found for \(brandName)")
-                    self.isLoadingModels = false
-                    self.phoneModels = []
-                    return
-                }
-                print("fetchPhoneModels: Got brand document ID: \(brandDocId), now fetching models")
-                db.collection("PhoneBrands")
-                    .document(brandDocId)
-                    .collection("Models")
-                    .getDocuments { snapshot, error in
-                        DispatchQueue.main.async {
-                            self.isLoadingModels = false
-                            
-                            if let error = error {
-                                print("Error fetching phone models for brand \(brandName): \(error)")
-                                return
-                            }
-                            
-                            guard let documents = snapshot?.documents else {
-                                print("No model documents found for brand \(brandName)")
-                                self.phoneModels = []
-                                return
-                            }
-                            
-                            let modelNames = documents.compactMap { document in
-                                document.data()["model"] as? String
-                            }
-                            print("Fetched \(modelNames.count) models for brand \(brandName): \(modelNames)")
-                            
-                            self.phoneModels = modelNames.sorted()
-                            print("Sorted models: \(self.phoneModels)")
-                            print("phoneModels state updated - count: \(self.phoneModels.count)")
-                        }
-                    }
+        filteredDevices = allDevices.filter { device in
+            let matches = device.storageLocation == selectedStorageLocation
+            if matches {
+                print("Debug: Device \(device.imei) matches - storageLocation: '\(device.storageLocation)'")
             }
+            return matches
         }
+        
+        print("Filtered \(filteredDevices.count) devices for storage location: \(selectedStorageLocation)")
+    }
+    
+    private func fetchPhoneModels() {
+        // This method is no longer used - we fetch all phones at once
+        print("fetchPhoneModels: This method is deprecated - using fetchAllPhonesAndStorageLocations instead")
     }
     
     private func fetchStorageLocations() {
@@ -1102,11 +1207,11 @@ struct SalesAddProductDialog: View {
                     }
                     
                     let data = document.data()
-                    if let name = data?["name"] as? String {
+                    if let name = data?["storageLocation"] as? String {
                         locationNames[locationId] = name
                         print("Fetched storage location name: \(name) for ID: \(locationId)")
                     } else {
-                        print("No name field found for storage location \(locationId)")
+                        print("No storageLocation field found for storage location \(locationId)")
                     }
                 }
         }
@@ -1230,11 +1335,16 @@ struct SalesAddProductDialog: View {
             self.carrierIdToName = carrierIdToName
             
             // Now create the DeviceInfo objects with resolved names
-            self.allDevices = phoneDocuments.compactMap { doc in
+            self.allDevices = phoneDocuments.compactMap { doc -> DeviceInfo? in
                         let data = doc.data()
                 guard let imei = data["imei"] as? String else {
                             return nil
                         }
+                
+                // For now, use placeholder values since we don't have brand/model info in this context
+                // This method is deprecated and will be replaced by the new approach
+                let brandName = "Unknown"
+                let modelName = "Unknown"
                 
                 // Resolve capacity name
                 var capacityName = "Unknown"
@@ -1299,9 +1409,39 @@ struct SalesAddProductDialog: View {
                 // Get unit price
                 let unitPrice = data["unitCost"] as? Double ?? 0.0
                 
-                return DeviceInfo(capacity: capacityName, capacityUnit: capacityUnit, color: colorName, imei: imei, carrier: carrierName, status: status, unitPrice: unitPrice)
+                // Resolve storage location name
+                var storageLocationName = "Unknown"
+                if let storageLocationData = data["storageLocation"] {
+                    if let storageLocationStr = storageLocationData as? String {
+                        if storageLocationStr.hasPrefix("/StorageLocations/") {
+                            let pathComponents = storageLocationStr.components(separatedBy: "/")
+                            if pathComponents.count >= 3, let resolvedName = self.storageLocationIdToName[pathComponents[2]] {
+                                storageLocationName = resolvedName
+                            }
+                        } else {
+                            storageLocationName = storageLocationStr
+                        }
+                    } else if let storageLocationRef = storageLocationData as? DocumentReference,
+                              let resolvedName = self.storageLocationIdToName[storageLocationRef.documentID] {
+                        storageLocationName = resolvedName
+                    }
+                }
+                
+                return DeviceInfo(
+                    brand: brandName,
+                    model: modelName,
+                    capacity: capacityName,
+                    capacityUnit: capacityUnit,
+                    color: colorName,
+                    imei: imei,
+                    carrier: carrierName,
+                    status: status,
+                    unitPrice: unitPrice,
+                    storageLocation: storageLocationName
+                )
             }
                     
+                    // Don't filter - we'll show all devices but mark the ones in cart
                     self.filteredDevices = self.allDevices
                     self.selectedCapacity = ""
                     self.selectedColor = ""
@@ -1534,14 +1674,8 @@ struct SalesAddProductDialog: View {
                     return
                 }
                 
-                self.phoneBrands.append(name)
-                self.phoneBrands.sort()
-                self.selectedBrand = name
-                self.brandSearchText = name
-                self.showingBrandDropdown = false
-                
-                // Load models for the new brand
-                self.fetchPhoneModels()
+                // Refresh all data since we're using the new approach
+                self.fetchAllPhonesAndStorageLocations()
             }
         }
     }
@@ -1578,15 +1712,8 @@ struct SalesAddProductDialog: View {
                                 return
                             }
                             
-                            // Add to local array
-                            self.phoneModels.append(modelName)
-                            self.phoneModels.sort()
-                            self.selectedModel = modelName
-                            self.modelSearchText = modelName
-                            self.showingModelDropdown = false
-                            
-                            // Load storage locations for the new model
-                            self.fetchStorageLocations()
+                            // Refresh all data since we're using the new approach
+                            self.fetchAllPhonesAndStorageLocations()
                         }
                     }
             }
@@ -1621,10 +1748,55 @@ struct SalesAddProductDialog: View {
 // MARK: - Device Filtering Table
 struct DeviceFilteringTable: View {
     @Binding var devices: [SalesAddProductDialog.DeviceInfo]
+    @Binding var selectedBrand: String
+    @Binding var selectedModel: String
     @Binding var selectedCapacity: String
     @Binding var selectedColor: String
     @Binding var selectedIMEIs: Set<String>
     @Binding var showActiveOnly: Bool
+    var cartIMEIs: Set<String> = []
+    
+    private var uniqueBrands: [String] {
+        Array(Set(devices.map { $0.brand })).sorted()
+    }
+    
+    private var uniqueModels: [String] {
+        Array(Set(devices.map { $0.model })).sorted()
+    }
+    
+    private var filteredBrands: [String] {
+        var filtered = devices
+        
+        // Apply all filters except brand
+        if !selectedModel.isEmpty {
+            filtered = filtered.filter { $0.model == selectedModel }
+        }
+        if !selectedCapacity.isEmpty {
+            filtered = filtered.filter { $0.capacity == selectedCapacity }
+        }
+        if !selectedColor.isEmpty {
+            filtered = filtered.filter { $0.color == selectedColor }
+        }
+        
+        return Array(Set(filtered.map { $0.brand })).sorted()
+    }
+    
+    private var filteredModels: [String] {
+        var filtered = devices
+        
+        // Apply all filters except model
+        if !selectedBrand.isEmpty {
+            filtered = filtered.filter { $0.brand == selectedBrand }
+        }
+        if !selectedCapacity.isEmpty {
+            filtered = filtered.filter { $0.capacity == selectedCapacity }
+        }
+        if !selectedColor.isEmpty {
+            filtered = filtered.filter { $0.color == selectedColor }
+        }
+        
+        return Array(Set(filtered.map { $0.model })).sorted()
+    }
     
     private var uniqueCapacities: [String] {
         Array(Set(devices.map { $0.capacity })).sorted()
@@ -1642,32 +1814,62 @@ struct DeviceFilteringTable: View {
             filtered = filtered.filter { $0.status == "Active" }
         }
         
-        // If both capacity and color are selected, show only IMEIs that match both
-        if !selectedCapacity.isEmpty && !selectedColor.isEmpty {
-            filtered = filtered.filter { $0.capacity == selectedCapacity && $0.color == selectedColor }
-        } else if !selectedCapacity.isEmpty {
+        // Apply brand filter
+        if !selectedBrand.isEmpty {
+            filtered = filtered.filter { $0.brand == selectedBrand }
+        }
+        
+        // Apply model filter
+        if !selectedModel.isEmpty {
+            filtered = filtered.filter { $0.model == selectedModel }
+        }
+        
+        // Apply capacity filter
+        if !selectedCapacity.isEmpty {
             filtered = filtered.filter { $0.capacity == selectedCapacity }
-        } else if !selectedColor.isEmpty {
+        }
+        
+        // Apply color filter
+        if !selectedColor.isEmpty {
             filtered = filtered.filter { $0.color == selectedColor }
         }
+        
+        // Exclude cart items
+        filtered = filtered.filter { !cartIMEIs.contains($0.imei) }
         
         return filtered
     }
     
     private var filteredCapacities: [String] {
-        if selectedColor.isEmpty {
-            return uniqueCapacities
-        } else {
-            return Array(Set(devices.filter { $0.color == selectedColor }.map { $0.capacity })).sorted()
+        var filtered = devices
+        
+        if !selectedBrand.isEmpty {
+            filtered = filtered.filter { $0.brand == selectedBrand }
         }
+        if !selectedModel.isEmpty {
+            filtered = filtered.filter { $0.model == selectedModel }
+        }
+        if !selectedColor.isEmpty {
+            filtered = filtered.filter { $0.color == selectedColor }
+        }
+        
+        return Array(Set(filtered.map { $0.capacity })).sorted()
     }
     
     private var filteredColors: [String] {
-        if selectedCapacity.isEmpty {
-            return uniqueColors
-        } else {
-            return Array(Set(devices.filter { $0.capacity == selectedCapacity }.map { $0.color })).sorted()
+        var filtered = devices
+        
+        if !selectedBrand.isEmpty {
+            filtered = filtered.filter { $0.brand == selectedBrand }
         }
+        if !selectedModel.isEmpty {
+            filtered = filtered.filter { $0.model == selectedModel }
+        }
+        if !selectedCapacity.isEmpty {
+            filtered = filtered.filter { $0.capacity == selectedCapacity }
+        }
+        
+        return Array(Set(filtered.map { $0.color })).sorted()
     }
     
     var body: some View {
@@ -1706,6 +1908,8 @@ struct DeviceFilteringTable: View {
     
     private var tableContainer: some View {
         HStack(alignment: .top, spacing: 0) {
+            brandColumn
+            modelColumn
             capacityColumn
             colorColumn
             imeiColumn
@@ -1726,12 +1930,42 @@ struct DeviceFilteringTable: View {
             .shadow(color: Color.black.opacity(0.05), radius: 8, x: 0, y: 4)
     }
     
+    private var brandColumn: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            columnHeader(title: "Brand")
+            brandContent
+        }
+        .frame(width: 160)
+        .background(.regularMaterial)
+        .overlay(
+            Rectangle()
+                .fill(Color.secondary.opacity(0.2))
+                .frame(width: 1),
+            alignment: .trailing
+        )
+    }
+    
+    private var modelColumn: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            columnHeader(title: "Model")
+            modelContent
+        }
+        .frame(width: 230)
+        .background(.regularMaterial)
+        .overlay(
+            Rectangle()
+                .fill(Color.secondary.opacity(0.2))
+                .frame(width: 1),
+            alignment: .trailing
+        )
+    }
+    
     private var capacityColumn: some View {
         VStack(alignment: .leading, spacing: 0) {
             columnHeader(title: "Capacity")
             capacityContent
         }
-        .frame(maxWidth: .infinity)
+        .frame(width: 140)
         .background(.regularMaterial)
         .overlay(
             Rectangle()
@@ -1746,7 +1980,7 @@ struct DeviceFilteringTable: View {
             columnHeader(title: "Color")
             colorContent
         }
-        .frame(maxWidth: .infinity)
+        .frame(width: 180)
         .background(.regularMaterial)
         .overlay(
             Rectangle()
@@ -1811,6 +2045,55 @@ struct DeviceFilteringTable: View {
         )
     }
     
+    private var brandContent: some View {
+        ScrollView {
+            LazyVStack(spacing: 2) {
+                ForEach(filteredBrands, id: \.self) { brand in
+                    BrandRow(
+                        brand: brand,
+                        isSelected: selectedBrand == brand,
+                        onTap: {
+                            if selectedBrand == brand {
+                                selectedBrand = ""
+                            } else {
+                                selectedBrand = brand
+                                selectedModel = ""
+                                selectedCapacity = ""
+                                selectedColor = ""
+                            }
+                        }
+                    )
+                }
+            }
+            .padding(.vertical, 8)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    private var modelContent: some View {
+        ScrollView {
+            LazyVStack(spacing: 2) {
+                ForEach(filteredModels, id: \.self) { model in
+                    ModelRow(
+                        model: model,
+                        isSelected: selectedModel == model,
+                        onTap: {
+                            if selectedModel == model {
+                                selectedModel = ""
+                            } else {
+                                selectedModel = model
+                                selectedCapacity = ""
+                                selectedColor = ""
+                            }
+                        }
+                    )
+                }
+            }
+            .padding(.vertical, 8)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
     private var capacityContent: some View {
                     ScrollView {
             LazyVStack(spacing: 2) {
@@ -1825,7 +2108,6 @@ struct DeviceFilteringTable: View {
                                             selectedCapacity = ""
                                         } else {
                                             selectedCapacity = capacity
-                                            selectedIMEIs.removeAll()
                                         }
                                     }
                                 )
@@ -1833,7 +2115,7 @@ struct DeviceFilteringTable: View {
                         }
             .padding(.vertical, 8)
         }
-        .frame(maxHeight: 400)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.primary.opacity(0.02))
     }
     
@@ -1849,7 +2131,6 @@ struct DeviceFilteringTable: View {
                                             selectedColor = ""
                                         } else {
                                             selectedColor = color
-                                            selectedIMEIs.removeAll()
                                         }
                                     }
                                 )
@@ -1857,7 +2138,7 @@ struct DeviceFilteringTable: View {
                         }
             .padding(.vertical, 8)
         }
-        .frame(maxHeight: 400)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.primary.opacity(0.02))
     }
     
@@ -1868,11 +2149,15 @@ struct DeviceFilteringTable: View {
                                 IMEIRow(
                                     device: device,
                                     isSelected: selectedIMEIs.contains(device.imei),
+                                    isInCart: cartIMEIs.contains(device.imei),
                                     onTap: {
-                                        if selectedIMEIs.contains(device.imei) {
-                                            selectedIMEIs.remove(device.imei)
-                                        } else {
+                                        // Don't allow selection if already in cart
+                                        if !cartIMEIs.contains(device.imei) {
+                                            if selectedIMEIs.contains(device.imei) {
+                                                selectedIMEIs.remove(device.imei)
+                                            } else {
                                                 selectedIMEIs.insert(device.imei)
+                                            }
                                         }
                                     }
                                 )
@@ -1880,12 +2165,475 @@ struct DeviceFilteringTable: View {
                         }
             .padding(.vertical, 8)
         }
-        .frame(maxHeight: 400)
-        .background(Color.primary.opacity(0.02))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - Mobile Device Filtering Table (iPhone)
+struct MobileDeviceFilteringTable: View {
+    @Binding var devices: [SalesAddProductDialog.DeviceInfo]
+    @Binding var selectedBrand: String
+    @Binding var selectedModel: String
+    @Binding var selectedCapacity: String
+    @Binding var selectedColor: String
+    @Binding var selectedIMEIs: Set<String>
+    @Binding var showActiveOnly: Bool
+    var cartIMEIs: Set<String> = []
+    
+    // Reuse the same filtering logic from DeviceFilteringTable
+    private var uniqueBrands: [String] {
+        Array(Set(devices.map { $0.brand })).sorted()
+    }
+    
+    private var uniqueModels: [String] {
+        Array(Set(devices.map { $0.model })).sorted()
+    }
+    
+    private var filteredBrands: [String] {
+        var filtered = devices
+        // Apply all filters except brand
+        if !selectedModel.isEmpty {
+            filtered = filtered.filter { $0.model == selectedModel }
+        }
+        if !selectedCapacity.isEmpty {
+            filtered = filtered.filter { $0.capacity == selectedCapacity }
+        }
+        if !selectedColor.isEmpty {
+            filtered = filtered.filter { $0.color == selectedColor }
+        }
+        return Array(Set(filtered.map { $0.brand })).sorted()
+    }
+    
+    private var filteredModels: [String] {
+        var filtered = devices
+        // Apply all filters except model
+        if !selectedBrand.isEmpty {
+            filtered = filtered.filter { $0.brand == selectedBrand }
+        }
+        if !selectedCapacity.isEmpty {
+            filtered = filtered.filter { $0.capacity == selectedCapacity }
+        }
+        if !selectedColor.isEmpty {
+            filtered = filtered.filter { $0.color == selectedColor }
+        }
+        return Array(Set(filtered.map { $0.model })).sorted()
+    }
+    
+    private var filteredCapacities: [String] {
+        var filtered = devices
+        if !selectedBrand.isEmpty {
+            filtered = filtered.filter { $0.brand == selectedBrand }
+        }
+        if !selectedModel.isEmpty {
+            filtered = filtered.filter { $0.model == selectedModel }
+        }
+        if !selectedColor.isEmpty {
+            filtered = filtered.filter { $0.color == selectedColor }
+        }
+        return Array(Set(filtered.map { $0.capacity })).sorted()
+    }
+    
+    private var filteredColors: [String] {
+        var filtered = devices
+        if !selectedBrand.isEmpty {
+            filtered = filtered.filter { $0.brand == selectedBrand }
+        }
+        if !selectedModel.isEmpty {
+            filtered = filtered.filter { $0.model == selectedModel }
+        }
+        if !selectedCapacity.isEmpty {
+            filtered = filtered.filter { $0.capacity == selectedCapacity }
+        }
+        return Array(Set(filtered.map { $0.color })).sorted()
+    }
+    
+    private var filteredIMEIs: [SalesAddProductDialog.DeviceInfo] {
+        var filtered = devices
+        if showActiveOnly {
+            filtered = filtered.filter { $0.status == "Active" }
+        }
+        if !selectedBrand.isEmpty {
+            filtered = filtered.filter { $0.brand == selectedBrand }
+        }
+        if !selectedModel.isEmpty {
+            filtered = filtered.filter { $0.model == selectedModel }
+        }
+        if !selectedCapacity.isEmpty {
+            filtered = filtered.filter { $0.capacity == selectedCapacity }
+        }
+        if !selectedColor.isEmpty {
+            filtered = filtered.filter { $0.color == selectedColor }
+        }
+        filtered = filtered.filter { !cartIMEIs.contains($0.imei) }
+        return filtered
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header with selection count
+            HStack {
+                Text("Available Devices")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(.primary)
+                
+                Spacer()
+                
+                if !selectedIMEIs.isEmpty {
+                    Text("\(selectedIMEIs.count) selected")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(
+                            Capsule()
+                                .fill(Color.blue)
+                        )
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .background(.regularMaterial)
+            
+            // Scrollable content
+            ScrollView {
+                VStack(spacing: 16) {
+                    // Brand filter row
+                    filterRow(
+                        title: "Brand",
+                        items: filteredBrands,
+                        selectedItem: selectedBrand,
+                        color: .purple,
+                        onItemTap: { brand in
+                            if selectedBrand == brand {
+                                selectedBrand = ""
+                            } else {
+                                selectedBrand = brand
+                                selectedModel = ""
+                                selectedCapacity = ""
+                                selectedColor = ""
+                            }
+                        }
+                    )
+                    
+                    // Model filter row
+                    filterRow(
+                        title: "Model",
+                        items: filteredModels,
+                        selectedItem: selectedModel,
+                        color: .orange,
+                        onItemTap: { model in
+                            if selectedModel == model {
+                                selectedModel = ""
+                            } else {
+                                selectedModel = model
+                                selectedCapacity = ""
+                                selectedColor = ""
+                            }
+                        }
+                    )
+                    
+                    // Capacity filter row
+                    filterRowWithUnit(
+                        title: "Capacity",
+                        items: filteredCapacities,
+                        selectedItem: selectedCapacity,
+                        color: .blue,
+                        getUnit: { capacity in
+                            devices.first(where: { $0.capacity == capacity })?.capacityUnit ?? ""
+                        },
+                        onItemTap: { capacity in
+                            if selectedCapacity == capacity {
+                                selectedCapacity = ""
+                            } else {
+                                selectedCapacity = capacity
+                            }
+                        }
+                    )
+                    
+                    // Color filter row
+                    filterRow(
+                        title: "Color",
+                        items: filteredColors,
+                        selectedItem: selectedColor,
+                        color: .green,
+                        onItemTap: { color in
+                            if selectedColor == color {
+                                selectedColor = ""
+                            } else {
+                                selectedColor = color
+                            }
+                        }
+                    )
+                    
+                    // Active only toggle
+                    HStack {
+                        Button(action: {
+                            showActiveOnly.toggle()
+                        }) {
+                            HStack(spacing: 8) {
+                                Image(systemName: showActiveOnly ? "checkmark.square.fill" : "square")
+                                    .foregroundColor(showActiveOnly ? .blue : .secondary)
+                                    .font(.system(size: 18))
+                                
+                                Text("Active only")
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundColor(.primary)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(.regularMaterial)
+                            )
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        
+                        Spacer()
+                    }
+                    .padding(.horizontal, 20)
+                    
+                    // Device list
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Devices")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(.primary)
+                            .padding(.horizontal, 20)
+                            .padding(.top, 8)
+                        
+                        LazyVStack(spacing: 8) {
+                            ForEach(filteredIMEIs, id: \.imei) { device in
+                                IMEIRow(
+                                    device: device,
+                                    isSelected: selectedIMEIs.contains(device.imei),
+                                    isInCart: cartIMEIs.contains(device.imei),
+                                    onTap: {
+                                        if !cartIMEIs.contains(device.imei) {
+                                            if selectedIMEIs.contains(device.imei) {
+                                                selectedIMEIs.remove(device.imei)
+                                            } else {
+                                                selectedIMEIs.insert(device.imei)
+                                            }
+                                        }
+                                    }
+                                )
+                                .padding(.horizontal, 20)
+                            }
+                        }
+                    }
+                    .padding(.top, 8)
+                }
+                .padding(.vertical, 16)
+            }
+        }
+    }
+    
+    private func filterRow(
+        title: String,
+        items: [String],
+        selectedItem: String,
+        color: Color,
+        onItemTap: @escaping (String) -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(.primary)
+                .padding(.horizontal, 20)
+            
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(Array(items.enumerated()), id: \.element) { index, item in
+                        filterItemButton(
+                            item: item,
+                            isSelected: selectedItem == item,
+                            color: color,
+                            onTap: { onItemTap(item) }
+                        )
+                    }
+                }
+                .padding(.horizontal, 20)
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func filterItemButton(
+        item: String,
+        isSelected: Bool,
+        color: Color,
+        onTap: @escaping () -> Void
+    ) -> some View {
+        Button(action: onTap) {
+            HStack(spacing: 6) {
+                Text(item)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(isSelected ? .white : .primary)
+                
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.white)
+                        .font(.system(size: 14, weight: .medium))
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(filterItemBackground(isSelected: isSelected, color: color))
+            .overlay(filterItemBorder(isSelected: isSelected, color: color))
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+    
+    private func filterItemBackground(isSelected: Bool, color: Color) -> some View {
+        RoundedRectangle(cornerRadius: 8)
+            .fill(isSelected ? color : Color.gray.opacity(0.2))
+    }
+    
+    private func filterItemBorder(isSelected: Bool, color: Color) -> some View {
+        RoundedRectangle(cornerRadius: 8)
+            .stroke(isSelected ? color : Color.clear, lineWidth: 1.5)
+    }
+    
+    private func filterRowWithUnit(
+        title: String,
+        items: [String],
+        selectedItem: String,
+        color: Color,
+        getUnit: @escaping (String) -> String,
+        onItemTap: @escaping (String) -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(.primary)
+                .padding(.horizontal, 20)
+            
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(Array(items.enumerated()), id: \.element) { index, item in
+                        filterItemButtonWithUnit(
+                            item: item,
+                            unit: getUnit(item),
+                            isSelected: selectedItem == item,
+                            color: color,
+                            onTap: { onItemTap(item) }
+                        )
+                    }
+                }
+                .padding(.horizontal, 20)
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func filterItemButtonWithUnit(
+        item: String,
+        unit: String,
+        isSelected: Bool,
+        color: Color,
+        onTap: @escaping () -> Void
+    ) -> some View {
+        Button(action: onTap) {
+            HStack(spacing: 4) {
+                Text(item)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(isSelected ? .white : .primary)
+                
+                if !unit.isEmpty {
+                    Text(unit)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(isSelected ? .white.opacity(0.8) : .secondary)
+                }
+                
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.white)
+                        .font(.system(size: 14, weight: .medium))
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(filterItemBackground(isSelected: isSelected, color: color))
+            .overlay(filterItemBorder(isSelected: isSelected, color: color))
+        }
+        .buttonStyle(PlainButtonStyle())
     }
 }
 
 // MARK: - Row Components
+struct BrandRow: View {
+    let brand: String
+    let isSelected: Bool
+    let onTap: () -> Void
+    
+    var body: some View {
+        HStack {
+            Text(brand)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(isSelected ? .white : .primary)
+            
+            Spacer()
+            
+            if isSelected {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.white)
+                    .font(.system(size: 16, weight: .medium))
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isSelected ? Color.purple : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isSelected ? Color.purple : Color.clear, lineWidth: 1)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onTap()
+        }
+    }
+}
+
+struct ModelRow: View {
+    let model: String
+    let isSelected: Bool
+    let onTap: () -> Void
+    
+    var body: some View {
+        HStack {
+            Text(model)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(isSelected ? .white : .primary)
+            
+            Spacer()
+            
+            if isSelected {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.white)
+                    .font(.system(size: 16, weight: .medium))
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isSelected ? Color.orange : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isSelected ? Color.orange : Color.clear, lineWidth: 1)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onTap()
+        }
+    }
+}
+
 struct CapacityRow: View {
     let capacity: String
     let capacityUnit: String
@@ -1970,6 +2718,7 @@ struct ColorRow: View {
 struct IMEIRow: View {
     let device: SalesAddProductDialog.DeviceInfo
     let isSelected: Bool
+    var isInCart: Bool = false
     let onTap: () -> Void
     
     var body: some View {
@@ -2017,9 +2766,22 @@ struct IMEIRow: View {
     
     private var rightSection: some View {
         HStack(spacing: 8) {
-            pricePill
-            statusPill
-            selectionIndicator
+            if !isInCart {
+                pricePill
+                statusPill
+                selectionIndicator
+            } else {
+                // Show "Already in Cart" label
+                Text("Already in Cart")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.orange)
+                    )
+            }
         }
     }
     
@@ -2374,6 +3136,7 @@ struct StorageLocationDropdownField: View {
     @Binding var showingDropdown: Bool
     @Binding var buttonFrame: CGRect
     let storageLocations: [String]
+    let phoneCounts: [String: Int]
     let isLoading: Bool
     @FocusState.Binding var isFocused: Bool
     @Binding var internalSearchText: String
@@ -2491,25 +3254,6 @@ struct StorageLocationDropdownField: View {
                 showingDropdown = true
             }
         }
-        #if os(iOS)
-        .overlay(
-            Group {
-                if showingDropdown && isEnabled {
-                    SalesStorageLocationDropdownOverlay(
-                        isOpen: $showingDropdown,
-                        selectedStorageLocation: $selectedStorageLocation,
-                        searchText: $searchText,
-                        internalSearchText: $internalSearchText,
-                        storageLocations: storageLocations,
-                        buttonFrame: buttonFrame,
-                        onAddStorageLocation: onAddStorageLocation,
-                        onRenameStorageLocation: { _, _ in },
-                        onStorageLocationSelected: onStorageLocationSelected
-                    )
-                }
-            }
-        )
-        #endif
     }
 }
 
@@ -3122,6 +3866,7 @@ struct SalesStorageLocationDropdownOverlay: View {
     @Binding var searchText: String
     @Binding var internalSearchText: String
     let storageLocations: [String]
+    let phoneCounts: [String: Int] // New parameter for phone counts
     let buttonFrame: CGRect
     let onAddStorageLocation: (String) -> Void
     let onRenameStorageLocation: (String, String) -> Void
@@ -3212,6 +3957,7 @@ struct SalesStorageLocationDropdownOverlay: View {
                         VStack(spacing: 0) {
                             cleanStorageLocationRow(
                                 title: location,
+                                phoneCount: phoneCounts[location] ?? 0,
                                 isAddOption: false,
                                 action: {
                                     print("Selected storage location: \(location)")
@@ -3358,7 +4104,7 @@ struct SalesStorageLocationDropdownOverlay: View {
     
     // MARK: - Storage Location Row Views
     
-    private func cleanStorageLocationRow(title: String, isAddOption: Bool, action: @escaping () -> Void) -> some View {
+    private func cleanStorageLocationRow(title: String, phoneCount: Int = 0, isAddOption: Bool, action: @escaping () -> Void) -> some View {
         HStack(spacing: 12) {
             Button(action: action) {
                 HStack(spacing: 12) {
@@ -3371,6 +4117,20 @@ struct SalesStorageLocationDropdownOverlay: View {
                         .font(.system(size: 16, weight: .medium))
                         .foregroundColor(isAddOption ? Color(red: 0.20, green: 0.60, blue: 0.40) : .primary)
                         .fontWeight(isAddOption ? .semibold : .medium)
+                    
+                    Spacer()
+                    
+                    if !isAddOption && phoneCount > 0 {
+                        Text("\(phoneCount)")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                Capsule()
+                                    .fill(Color.secondary.opacity(0.1))
+                            )
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -3432,7 +4192,164 @@ struct PriceSettingInterface: View {
     @State private var commonPrice: String = ""
     @FocusState private var isCommonPriceFieldFocused: Bool
     
+    #if os(iOS)
+    private var isiPhone: Bool {
+        UIDevice.current.userInterfaceIdiom == .phone
+    }
+    #else
+    private var isiPhone: Bool {
+        false
+    }
+    #endif
+    
     var body: some View {
+        if isiPhone {
+            iPhonePriceSettingView
+        } else {
+            DesktopPriceSettingView
+        }
+    }
+    
+    // MARK: - iPhone Optimized View
+    private var iPhonePriceSettingView: some View {
+        VStack(spacing: 0) {
+            headerSection
+            
+            Divider()
+            
+            deviceListSection
+        }
+    }
+    
+    private var headerSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Set Selling Prices")
+                .font(.title3)
+                .fontWeight(.bold)
+                .foregroundColor(.primary)
+            
+            commonPriceToggleSection
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
+        .padding(.bottom, 12)
+    }
+    
+    private var commonPriceToggleSection: some View {
+        VStack(spacing: 12) {
+            commonPriceToggleButton
+            
+            if useCommonPrice {
+                commonPriceInputRow
+            }
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 16)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(.regularMaterial)
+        )
+    }
+    
+    private var commonPriceToggleButton: some View {
+        Button(action: {
+            useCommonPrice.toggle()
+            if !useCommonPrice {
+                commonPrice = ""
+                for device in selectedDevices {
+                    deviceSellingPrices[device.imei] = ""
+                    deviceProfitLoss[device.imei] = 0.0
+                }
+            } else if !commonPrice.isEmpty {
+                applyCommonPriceToAll()
+            }
+        }) {
+            HStack(spacing: 8) {
+                Image(systemName: useCommonPrice ? "checkmark.square.fill" : "square")
+                    .foregroundColor(useCommonPrice ? .blue : .secondary)
+                    .font(.system(size: 16))
+                
+                Text("Use common price for all")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(.primary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+    
+    private var commonPriceInputRow: some View {
+        HStack(spacing: 8) {
+            Text("Common Price:")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(.secondary)
+            
+            Spacer()
+            
+            commonPriceInput
+        }
+    }
+    
+    private var commonPriceInput: some View {
+        HStack(spacing: 4) {
+            Text("$")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(.primary)
+            
+            TextField("0.00", text: $commonPrice)
+                .textFieldStyle(PlainTextFieldStyle())
+                .font(.system(size: 16, weight: .semibold))
+                #if os(iOS)
+                .keyboardType(.decimalPad)
+                #endif
+                .focused($isCommonPriceFieldFocused)
+                .frame(width: 120)
+                .multilineTextAlignment(TextAlignment.trailing)
+                .onChange(of: commonPrice) { newValue in
+                    if useCommonPrice {
+                        applyCommonPriceToAll()
+                    }
+                }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(.regularMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+                )
+        )
+    }
+    
+    private var deviceListSection: some View {
+        ScrollView {
+            LazyVStack(spacing: 12) {
+                ForEach(selectedDevices, id: \.imei) { device in
+                    DevicePriceRow(
+                        device: device,
+                        sellingPrice: Binding(
+                            get: { deviceSellingPrices[device.imei, default: ""] },
+                            set: { newValue in
+                                if !useCommonPrice {
+                                    deviceSellingPrices[device.imei] = newValue
+                                    updateProfitLoss(for: device, sellingPrice: newValue)
+                                }
+                            }
+                        ),
+                        isDisabled: useCommonPrice,
+                        isiPhone: true
+                    )
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+        }
+    }
+    
+    // MARK: - Desktop/iPad View
+    private var DesktopPriceSettingView: some View {
         VStack(alignment: .leading, spacing: 16) {
             // Header
             VStack(alignment: .leading, spacing: 8) {
@@ -3529,7 +4446,8 @@ struct PriceSettingInterface: View {
                                     }
                                 }
                             ),
-                            isDisabled: useCommonPrice
+                            isDisabled: useCommonPrice,
+                            isiPhone: false
                         )
                     }
                 }
@@ -3559,6 +4477,7 @@ struct DevicePriceRow: View {
     let device: SalesAddProductDialog.DeviceInfo
     @Binding var sellingPrice: String
     var isDisabled: Bool = false
+    var isiPhone: Bool = false
     @FocusState private var isPriceFieldFocused: Bool
     
     private var profitLoss: Double {
@@ -3587,12 +4506,157 @@ struct DevicePriceRow: View {
     }
     
     var body: some View {
+        if isiPhone {
+            iPhonePriceRow
+        } else {
+            DesktopPriceRow
+        }
+    }
+    
+    // MARK: - iPhone Optimized Row
+    private var iPhonePriceRow: some View {
+        VStack(spacing: 12) {
+            deviceInfoSection
+            
+            Divider()
+            
+            priceInputsSection
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(rowBackground)
+    }
+    
+    private var deviceInfoSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(device.imei)
+                .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                .foregroundColor(.primary)
+            
+            Text("\(device.brand) \(device.model)")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(.primary)
+            
+            Text("\(device.capacity) \(device.capacityUnit) • \(device.color) • \(device.carrier)")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    
+    private var priceInputsSection: some View {
+        VStack(spacing: 12) {
+            costPriceRow
+            sellingPriceRow
+            profitLossRow
+        }
+    }
+    
+    private var costPriceRow: some View {
+        HStack {
+            Text("Cost Price:")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(.secondary)
+            
+            Spacer()
+            
+            Text("$\(String(format: "%.2f", device.unitPrice))")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(.primary)
+        }
+    }
+    
+    private var sellingPriceRow: some View {
+        HStack {
+            Text("Selling Price:")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(.secondary)
+            
+            Spacer()
+            
+            sellingPriceInput
+        }
+    }
+    
+    private var sellingPriceInput: some View {
+        HStack(spacing: 6) {
+            Text("$")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(.primary)
+            
+            TextField("0.00", text: $sellingPrice)
+                .textFieldStyle(PlainTextFieldStyle())
+                .font(.system(size: 16, weight: .semibold))
+                #if os(iOS)
+                .keyboardType(.decimalPad)
+                #endif
+                .focused($isPriceFieldFocused)
+                .frame(width: 100)
+                .multilineTextAlignment(TextAlignment.trailing)
+                .disabled(isDisabled)
+                .opacity(isDisabled ? 0.6 : 1.0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(sellingPriceBackground)
+    }
+    
+    private var sellingPriceBackground: some View {
+        ZStack {
+            if isDisabled {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.gray.opacity(0.1))
+            } else {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.clear)
+                    .background(.regularMaterial)
+            }
+            sellingPriceBorder
+        }
+    }
+    
+    private var sellingPriceBorder: some View {
+        RoundedRectangle(cornerRadius: 8)
+            .stroke(isPriceFieldFocused ? Color.blue.opacity(0.5) : Color.secondary.opacity(0.2), lineWidth: isPriceFieldFocused ? 1.5 : 1)
+    }
+    
+    private var profitLossRow: some View {
+        HStack {
+            Text("Profit/Loss:")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(.secondary)
+            
+            Spacer()
+            
+            Text(profitLossText)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(profitLossColor)
+        }
+    }
+    
+    private var rowBackground: some View {
+        RoundedRectangle(cornerRadius: 12)
+            .fill(.regularMaterial)
+            .overlay(rowBorder)
+    }
+    
+    private var rowBorder: some View {
+        RoundedRectangle(cornerRadius: 12)
+            .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+    }
+    
+    // MARK: - Desktop/iPad Row
+    private var DesktopPriceRow: some View {
         VStack(spacing: 0) {
             HStack(spacing: 20) {
                 // Device info
                 VStack(alignment: .leading, spacing: 4) {
                     Text(device.imei)
                         .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.primary)
+                    
+                    Text("\(device.brand) \(device.model)")
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(.primary)
                     
                     Text("\(device.capacity) \(device.capacityUnit) • \(device.color) • \(device.carrier)")
@@ -3708,4 +4772,6 @@ struct ConfirmationOverlay: View {
         }
     }
 }
+
+
 

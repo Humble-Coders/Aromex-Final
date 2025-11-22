@@ -35,26 +35,54 @@ struct CustomerBalancesView: View {
     
     var body: some View {
         HStack(spacing: 8) {
-            // Always show CAD balance first
-            let roundedCADBalance = round(customer.balance * 100) / 100
-            HStack(spacing: 2) {
-                Text("CAD")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                Text("\(roundedCADBalance, specifier: "%.2f")")
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundColor(abs(roundedCADBalance) < 0.01 ? .gray : (roundedCADBalance > 0 ? .green : .red))
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Color.gray.opacity(0.1))
-            )
+            // Display CAD balance
+            cadBalanceDisplay
             
-            // Show other currencies only if they have non-zero balances
-            ForEach(Array(currencyBalances.keys.sorted()), id: \.self) { currencyName in
+            // Show other currencies only for myself_special_id (cash supports multiple currencies)
+            // For myself_bank, only show CAD (no other currencies)
+            if customer.id == "myself_special_id" {
+                otherCurrenciesDisplay
+            }
+        }
+        .onAppear {
+            fetchCurrencyBalances()
+        }
+    }
+    
+    private var cadBalanceDisplay: some View {
+        HStack(spacing: 2) {
+            Text("CAD")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+            Text("\(roundedCADBalance, specifier: "%.2f")")
+                .font(.caption)
+                .fontWeight(.medium)
+                .foregroundColor(abs(roundedCADBalance) < 0.01 ? .gray : (roundedCADBalance > 0 ? .green : .red))
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Color.gray.opacity(0.1))
+        )
+    }
+    
+    private var roundedCADBalance: Double {
+        let cadBalance: Double
+        if customer.id == "myself_special_id" || customer.id == "myself_bank_special_id" {
+            // For special customers, use fetched balances (will be in currencyBalances)
+            cadBalance = currencyBalances["CAD"] ?? currencyBalances["amount"] ?? 0.0
+        } else {
+            // For regular customers, use customer.balance
+            cadBalance = customer.balance
+        }
+        return round(cadBalance * 100) / 100
+    }
+    
+    private var otherCurrenciesDisplay: some View {
+        ForEach(Array(currencyBalances.keys.sorted()), id: \.self) { currencyName in
+            // Skip CAD and "amount" (amount is CAD)
+            if currencyName != "CAD" && currencyName != "amount" {
                 if let balance = currencyBalances[currencyName] {
                     let roundedBalance = round(balance * 100) / 100
                     if abs(roundedBalance) >= 0.01 { // Only show if not effectively zero
@@ -83,17 +111,67 @@ struct CustomerBalancesView: View {
                 }
             }
         }
-        .onAppear {
-            fetchCurrencyBalances()
-        }
     }
     
     private func fetchCurrencyBalances() {
-        guard let customerId = customer.id, customerId != "myself_special_id" else {
+        guard let customerId = customer.id else {
             return
         }
         
         isLoading = true
+        
+        // Special handling for Myself BANK - fetch from Balances/bank
+        if customerId == "myself_bank_special_id" {
+            let bankRef = db.collection("Balances").document("bank")
+            bankRef.getDocument { snapshot, error in
+                DispatchQueue.main.async {
+                    self.isLoading = false
+                    
+                    if let error = error {
+                        print("❌ Error fetching bank balance: \(error.localizedDescription)")
+                        return
+                    }
+                    
+                    if let data = snapshot?.data(),
+                       let amount = data["amount"] as? Double {
+                        self.currencyBalances["CAD"] = amount
+                        print("💰 Loaded bank balance: \(amount) CAD")
+                    }
+                }
+            }
+            return
+        }
+        
+        // Special handling for Myself CASH - fetch from Balances/cash
+        if customerId == "myself_special_id" {
+            let cashRef = db.collection("Balances").document("cash")
+            cashRef.getDocument { snapshot, error in
+                DispatchQueue.main.async {
+                    self.isLoading = false
+                    
+                    if let error = error {
+                        print("❌ Error fetching cash balance: \(error.localizedDescription)")
+                        return
+                    }
+                    
+                    if let data = snapshot?.data() {
+                        var balances: [String: Double] = [:]
+                        for (key, value) in data {
+                            if key != "updatedAt", let doubleValue = value as? Double {
+                                balances[key] = doubleValue
+                            }
+                        }
+                        // Also map "amount" to "CAD" for consistency
+                        if let amount = balances["amount"], !balances.keys.contains("CAD") {
+                            balances["CAD"] = amount
+                        }
+                        self.currencyBalances = balances
+                        print("💰 Loaded cash balances: \(balances)")
+                    }
+                }
+            }
+            return
+        }
         
         db.collection("CurrencyBalances").document(customerId).getDocument { snapshot, error in
             DispatchQueue.main.async {
@@ -259,56 +337,90 @@ struct AddEntryView: View {
 
     private func clearAllFilters() {
         transactionSearchText = ""
-        selectedTransactionFilters = [.normalCash] // Reset to default (only normal cash)
         selectedDateFilter = .all
         applyTransactionFilters()
     }
 
     private func applyTransactionFilters() {
-        // Use the shared extension for filtering
-        filteredMixedTransactions = mixedTransactionManager.mixedTransactions.applyTransactionFilters(
-            searchText: transactionSearchText,
-            selectedFilters: selectedTransactionFilters,
-            dateFilter: selectedDateFilter,
-            customStartDate: customStartDate,
-            customEndDate: customEndDate
-        )
+        // Only show currency transactions (exclude sales and purchases entirely)
+        var filtered = mixedTransactionManager.mixedTransactions.filter { transaction in
+            // Only include currency transactions
+            return transaction.transactionType == .currency
+        }
+        
+        // Filter out exchange transactions - only show regular currency transactions
+        filtered = filtered.filter { transaction in
+            return transaction.currencyTransaction?.isExchange != true
+        }
+        
+        // Apply search filter
+        if !transactionSearchText.isEmpty {
+            filtered = filtered.filter { transaction in
+                let searchLower = transactionSearchText.lowercased()
+                if let currencyTx = transaction.currencyTransaction {
+                    return currencyTx.giverName.lowercased().contains(searchLower) ||
+                           currencyTx.takerName.lowercased().contains(searchLower) ||
+                           currencyTx.notes.lowercased().contains(searchLower) ||
+                           "\(currencyTx.amount)".contains(searchLower) ||
+                           currencyTx.currencyName.lowercased().contains(searchLower)
+                }
+                return false
+            }
+        }
+        
+        // Apply date filter
+        if selectedDateFilter != .all {
+            filtered = filtered.filter { transaction in
+                let transactionDate = transaction.timestamp.dateValue()
+                let calendar = Calendar.current
+                let now = Date()
+                
+                switch selectedDateFilter {
+                case .today:
+                    return calendar.isDate(transactionDate, inSameDayAs: now)
+                case .week:
+                    return calendar.dateInterval(of: .weekOfYear, for: now)?.contains(transactionDate) ?? false
+                case .month:
+                    return calendar.dateInterval(of: .month, for: now)?.contains(transactionDate) ?? false
+                case .year:
+                    return calendar.dateInterval(of: .year, for: now)?.contains(transactionDate) ?? false
+                case .custom:
+                    let startOfCustomStart = calendar.startOfDay(for: customStartDate)
+                    let endOfCustomEnd = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: customEndDate)) ?? customEndDate
+                    return transactionDate >= startOfCustomStart && transactionDate < endOfCustomEnd
+                case .all:
+                    return true
+                }
+            }
+        }
+        
+        filteredMixedTransactions = filtered
     }
 
     // Add the TransactionFilterButton component
     
     // Computed properties for validation
     private var isTransactionValid: Bool {
-        let basicValidation = selectedFromCustomer != nil &&
+        return selectedFromCustomer != nil &&
                selectedToCustomer != nil &&
                !amount.trimmingCharacters(in: .whitespaces).isEmpty &&
                Double(amount.trimmingCharacters(in: .whitespaces)) != nil &&
                Double(amount.trimmingCharacters(in: .whitespaces))! > 0 &&
                currencyManager.selectedCurrency != nil &&
                selectedFromCustomer?.id != selectedToCustomer?.id
-        
-        if isExchangeOn {
-            return basicValidation &&
-                   selectedReceivingCurrency != nil &&
-                   !customExchangeRate.trimmingCharacters(in: .whitespaces).isEmpty &&
-                   Double(customExchangeRate.trimmingCharacters(in: .whitespaces)) != nil &&
-                   Double(customExchangeRate.trimmingCharacters(in: .whitespaces))! > 0 &&
-                   selectedReceivingCurrency?.id != currencyManager.selectedCurrency?.id
-        }
-        
-        return basicValidation
     }
     
     // Filtered customers with "Myself" option
     private var filteredFromCustomers: [Customer] {
-        var customers = [myselfCustomer]
+        var customers = [myselfCustomer, myselfBankCustomer]
         if fromSearchText.isEmpty {
             customers.append(contentsOf: firebaseManager.customers)
         } else {
-            if "Myself".localizedCaseInsensitiveContains(fromSearchText) {
-                // Keep "Myself" if search matches
-            } else {
-                customers.removeFirst() // Remove "Myself" if search doesn't match
+            let searchLower = fromSearchText.lowercased()
+            if !("myself".contains(searchLower) || "cash".contains(searchLower) || "bank".contains(searchLower)) {
+                // Remove both Myself options if search doesn't match
+                customers.removeFirst()
+                customers.removeFirst()
             }
             customers.append(contentsOf: firebaseManager.customers.filter {
                 $0.name.localizedCaseInsensitiveContains(fromSearchText)
@@ -318,14 +430,15 @@ struct AddEntryView: View {
     }
     
     private var filteredToCustomers: [Customer] {
-        var customers = [myselfCustomer]
+        var customers = [myselfCustomer, myselfBankCustomer]
         if toSearchText.isEmpty {
             customers.append(contentsOf: firebaseManager.customers)
         } else {
-            if "Myself".localizedCaseInsensitiveContains(toSearchText) {
-                // Keep "Myself" if search matches
-            } else {
-                customers.removeFirst() // Remove "Myself" if search doesn't match
+            let searchLower = toSearchText.lowercased()
+            if !("myself".contains(searchLower) || "cash".contains(searchLower) || "bank".contains(searchLower)) {
+                // Remove both Myself options if search doesn't match
+                customers.removeFirst()
+                customers.removeFirst()
             }
             customers.append(contentsOf: firebaseManager.customers.filter {
                 $0.name.localizedCaseInsensitiveContains(toSearchText)
@@ -340,18 +453,24 @@ struct AddEntryView: View {
     
     // Create "Myself" customer instance
     private var myselfCustomer: Customer {
-        Customer(
-            id: "myself_special_id",
-            name: "Myself",
-            phone: "",
-            email: "",
-            address: "",
-            notes: "",
-            balance: 0.0,
-            type: .customer,
-            createdAt: nil,
-            updatedAt: nil
-        )
+        Customer(id: "myself_special_id", name: "Myself CASH", phone: "", email: "", address: "", notes: "", balance: 0, createdAt: nil, updatedAt: nil)
+    }
+    
+    private var myselfBankCustomer: Customer {
+        Customer(id: "myself_bank_special_id", name: "Myself BANK", phone: "", email: "", address: "", notes: "", balance: 0, createdAt: nil, updatedAt: nil)
+    }
+    
+    private var allCustomers: [Customer] {
+        // Get customers from Firebase (all types are in the single customers array)
+        var customers = firebaseManager.customers.filter { $0.type == .customer }
+        customers.append(contentsOf: firebaseManager.customers.filter { $0.type == .supplier })
+        customers.append(contentsOf: firebaseManager.customers.filter { $0.type == .middleman })
+        
+        // Add "Myself" options at the beginning
+        customers.insert(myselfCustomer, at: 0)
+        customers.insert(myselfBankCustomer, at: 1)
+        
+        return customers
     }
     
     var body: some View {
@@ -401,6 +520,8 @@ struct AddEntryView: View {
                 )
             }
             
+            // macOS only - currency dropdown as overlay
+            #if os(macOS)
             if currencyDropdownOpen {
                 CurrencyDropdownOverlay(
                     isOpen: $currencyDropdownOpen,
@@ -408,9 +529,6 @@ struct AddEntryView: View {
                         get: { currencyManager.selectedCurrency },
                         set: { newCurrency in
                             currencyManager.selectedCurrency = newCurrency
-                            if newCurrency != nil && isExchangeOn {
-                                handleGivingCurrencySelection()
-                            }
                         }
                     ),
                     currencies: currencyManager.allCurrencies,
@@ -420,35 +538,14 @@ struct AddEntryView: View {
                         showingAddCurrencyDialog = true
                     }
                 )
+                .zIndex(1000)
             }
-
-            // For receiving currency dropdown:
-            if showReceivingCurrencyDropdown {
-                CurrencyDropdownOverlay(
-                    isOpen: $showReceivingCurrencyDropdown,
-                    selectedCurrency: Binding(
-                        get: { selectedReceivingCurrency },
-                        set: { newCurrency in
-                            selectedReceivingCurrency = newCurrency
-                            if newCurrency != nil && isExchangeOn {
-                                handleReceivingCurrencySelection()
-                            }
-                        }
-                    ),
-                    currencies: currencyManager.allCurrencies,
-                    buttonFrame: receivingCurrencyButtonFrame,
-                    onAddCurrency: {
-                        showReceivingCurrencyDropdown = false
-                        showingAddCurrencyDialog = true
-                    }
-                )
-            }
+            #endif
         }
         .onAppear {
             isAmountFieldFocused = false
             currencyManager.fetchCurrencies()
             transactionManager.fetchTransactions()
-            salesTransactionManager.fetchSalesTransactions()
             refreshEntireScreen()
             applyTransactionFilters()
         }
@@ -601,15 +698,9 @@ struct AddEntryView: View {
                         .buttonStyle(PlainButtonStyle())
                     }
                     
-                    Text("Transaction Entry")
+                    Text("Currency Transactions")
                         .font(.headline)
                         .foregroundColor(.white.opacity(0.9))
-                    
-                    // Exchange Rates Bar (Vertical)
-                    exchangeRatesBarVertical
-                    
-                    // Total Exchange Profit Bar (Vertical)
-                    totalExchangeProfitBarVertical
                 }
                 .padding(.horizontal, horizontalPadding)
                 .padding(.vertical, 20)
@@ -629,50 +720,35 @@ struct AddEntryView: View {
                         
                         Spacer()
                         
-                        Text("Transaction Entry")
+                        Text("Currency Transactions")
                             .font(.title2)
                             .foregroundColor(.white.opacity(0.9))
                         
                         Spacer()
                         
-                        HStack(spacing: 16) {
-                            // Refresh Button
-                            Button(action: refreshEntireScreen) {
-                                HStack(spacing: 8) {
-                                    Image(systemName: "arrow.clockwise")
-                                        .font(.body)
-                                    Text("Refresh")
-                                        .font(.body)
-                                        .fontWeight(.semibold)
-                                }
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(Color.white.opacity(0.2))
-                                .cornerRadius(8)
+                        // Refresh Button
+                        Button(action: refreshEntireScreen) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.body)
+                                Text("Refresh")
+                                    .font(.body)
+                                    .fontWeight(.semibold)
                             }
-                            .buttonStyle(PlainButtonStyle())
-                            
-                            Button(action: {}) {
-                                Image(systemName: "person.crop.circle.fill")
-                                    .font(.largeTitle)
-                                    .foregroundColor(.white.opacity(0.8))
-                            }
-                            .buttonStyle(PlainButtonStyle())
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(Color.white.opacity(0.2))
+                            .cornerRadius(8)
                         }
+                        .buttonStyle(PlainButtonStyle())
                     }
-                    
-                    // Exchange Rates Bar (Horizontal)
-                    exchangeRatesBarHorizontal
-                    
-                    // Total Exchange Profit Bar (Horizontal)
-                    totalExchangeProfitBarHorizontal
                 }
                 .padding(.horizontal, horizontalPadding)
                 .padding(.vertical, 24)
             }
         }
-        .frame(height: shouldUseVerticalLayout ? 240 : 180)
+        .frame(height: shouldUseVerticalLayout ? 120 : 100)
     }
     
     // ADDED: Missing transactionSection
@@ -691,9 +767,9 @@ struct AddEntryView: View {
                 }
             }
             .padding(.vertical, shouldUseVerticalLayout ? 20 : 32) // Reduced padding for iPhone
-            .background(Color.white)
+            .background(Color.systemBackground)
             .cornerRadius(shouldUseVerticalLayout ? 12 : 16) // Smaller corner radius for iPhone
-            .shadow(color: .black.opacity(0.08), radius: shouldUseVerticalLayout ? 8 : 12, x: 0, y: shouldUseVerticalLayout ? 2 : 4) // Smaller shadow for iPhone
+            .shadow(color: Color.primary.opacity(0.08), radius: shouldUseVerticalLayout ? 8 : 12, x: 0, y: shouldUseVerticalLayout ? 2 : 4) // Smaller shadow for iPhone
             .padding(.horizontal, horizontalPadding)
         }
     }
@@ -719,7 +795,7 @@ struct AddEntryView: View {
                     
                     if !filteredMixedTransactions.isEmpty {
                         VStack(alignment: .trailing, spacing: 2) {
-                            Text("\(filteredMixedTransactions.count) transactions")
+                            Text("\(filteredMixedTransactions.count) currency transaction\(filteredMixedTransactions.count == 1 ? "" : "s")")
                                 .font(.callout)
                                 .foregroundColor(.secondary)
                         }
@@ -764,24 +840,6 @@ struct AddEntryView: View {
                 
                 // Filter Controls
                 VStack(spacing: shouldUseVerticalLayout ? 12 : 16) {
-                    // Transaction Type Filters
-                    VStack(alignment: .leading, spacing: shouldUseVerticalLayout ? 6 : 8) {
-                        Text("Transaction Types")
-                            .font(.system(size: shouldUseVerticalLayout ? 13 : 14, weight: .semibold))
-                            .foregroundColor(.primary)
-                        
-                        // All filters in one row for both layouts
-                        HStack(spacing: shouldUseVerticalLayout ? 6 : 8) {
-                            ForEach(TransactionFilter.allCases, id: \.self) { filter in
-                                TransactionFilterButton(
-                                    filter: filter,
-                                    isSelected: selectedTransactionFilters.contains(filter),
-                                    action: { toggleTransactionFilter(filter) }
-                                )
-                            }
-                        }
-                    }
-                    
                     // Date Filter
                     HStack(spacing: shouldUseVerticalLayout ? 12 : 16) {
                         VStack(alignment: .leading, spacing: shouldUseVerticalLayout ? 6 : 8) {
@@ -874,7 +932,7 @@ struct AddEntryView: View {
             
             // Transactions List
             VStack(spacing: 16) {
-                if transactionManager.isLoading || salesTransactionManager.isLoading {
+                if transactionManager.isLoading {
                     HStack {
                         ProgressView()
                             .scaleEffect(1.2)
@@ -1008,7 +1066,7 @@ struct AddEntryView: View {
                         .datePickerStyle(CompactDatePickerStyle())
                         .labelsHidden()
                         .frame(width: horizontalSizeClass == .compact ? 110 : 130, height: 44)
-                        .background(Color.white)
+                        .background(Color.systemBackground)
                         
                 }
                 
@@ -1145,7 +1203,7 @@ struct AddEntryView: View {
                             Image(systemName: "arrow.down.circle.fill")
                                 .font(.system(size: 24, weight: .medium))
                                 .foregroundColor(.blue)
-                                .background(Color.white)
+                                .background(Color.systemBackground)
                                 .clipShape(Circle())
                         }
                         .padding(.vertical, 8)
@@ -1188,7 +1246,7 @@ struct AddEntryView: View {
                 .background(
                     RoundedRectangle(cornerRadius: 12)
                         .fill(Color.systemBackground)
-                        .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 2)
+                        .shadow(color: Color.primary.opacity(0.06), radius: 8, x: 0, y: 2)
                         .overlay(
                             RoundedRectangle(cornerRadius: 12)
                                 .stroke(Color.blue.opacity(0.1), lineWidth: 1)
@@ -1211,6 +1269,28 @@ struct AddEntryView: View {
                         
                         combinedAmountCurrencyField
                             .frame(height: 44)
+                        
+                        // Inline currency dropdown (iOS only)
+                        #if os(iOS)
+                        if currencyDropdownOpen {
+                            CurrencyDropdownOverlay(
+                                isOpen: $currencyDropdownOpen,
+                                selectedCurrency: Binding(
+                                    get: { currencyManager.selectedCurrency },
+                                    set: { newCurrency in
+                                        currencyManager.selectedCurrency = newCurrency
+                                    }
+                                ),
+                                currencies: currencyManager.allCurrencies,
+                                buttonFrame: currencyButtonFrame,
+                                onAddCurrency: {
+                                    currencyDropdownOpen = false
+                                    showingAddCurrencyDialog = true
+                                }
+                            )
+                            .transition(.opacity)
+                        }
+                        #endif
                     }
                     
                     // DATE Section
@@ -1281,7 +1361,7 @@ struct AddEntryView: View {
                 .background(
                     RoundedRectangle(cornerRadius: 12)
                         .fill(Color.systemBackground)
-                        .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 2)
+                        .shadow(color: Color.primary.opacity(0.06), radius: 8, x: 0, y: 2)
                         .overlay(
                             RoundedRectangle(cornerRadius: 12)
                                 .stroke(Color.orange.opacity(0.1), lineWidth: 1)
@@ -1297,7 +1377,7 @@ struct AddEntryView: View {
                 .background(
                     RoundedRectangle(cornerRadius: 12)
                         .fill(Color.systemBackground)
-                        .shadow(color: Color.black.opacity(0.06), radius: 8, x: 0, y: 2)
+                        .shadow(color: Color.primary.opacity(0.06), radius: 8, x: 0, y: 2)
                         .overlay(
                             RoundedRectangle(cornerRadius: 12)
                                 .stroke(Color.indigo.opacity(0.1), lineWidth: 1)
@@ -1418,7 +1498,7 @@ struct AddEntryView: View {
                 #endif
                 .padding(.horizontal, 10)
                 .frame(height: 40)
-                .background(Color.white)
+                .background(Color.systemBackground)
         }
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(
@@ -1460,7 +1540,7 @@ struct AddEntryView: View {
                 #endif
                 .padding(.horizontal, 8)
                 .frame(width: 80, height: 44)
-                .background(Color.white)
+                .background(Color.systemBackground)
                 .cornerRadius(6)
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
@@ -1498,7 +1578,7 @@ struct AddEntryView: View {
                     #endif
                     .padding(.horizontal, 8)
                     .frame(width: 60, height: 44)
-                    .background(Color.white)
+                    .background(Color.systemBackground)
                     .cornerRadius(6)
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
@@ -2241,9 +2321,39 @@ struct AddEntryView: View {
         }
     }
     
-    // Process transaction function (alias for addTransaction)
-    private func processTransaction() {
-        addTransaction()
+    // Add this method near other customer selection logic
+    private func handleCustomerSelectionChange() {
+        // Check if Myself BANK is selected as from or to customer and set currency to CAD
+        if selectedFromCustomer?.id == "myself_bank_special_id" || selectedToCustomer?.id == "myself_bank_special_id" {
+            // Find CAD currency and select it
+            if let cadCurrency = currencyManager.currencies.first(where: { $0.name == "CAD" }) {
+                currencyManager.selectedCurrency = cadCurrency
+            }
+        }
+        
+        // Other logic for customer selection remains unchanged
+        // ...
+    }
+    
+    // Add this right after reverseMyCashBalance
+    private func reverseMyBankBalance(amount: Double, batch: WriteBatch, isAddition: Bool = true) async throws {
+        let db = Firestore.firestore()
+        let balancesRef = db.collection("Balances").document("bank")
+        
+        // Get current balances
+        let balancesDoc = try await balancesRef.getDocument()
+        var currentData = balancesDoc.data() ?? [:]
+        
+        // Reverse bank balance (always CAD)
+        let currentAmount = currentData["amount"] as? Double ?? 0.0
+        let reverseAmount = isAddition ? amount : -amount
+        currentData["amount"] = currentAmount + reverseAmount
+        print("🔄 Reversing my bank CAD: \(currentAmount) + \(reverseAmount) = \(currentAmount + reverseAmount)")
+        
+        // Add timestamp
+        currentData["updatedAt"] = Timestamp()
+        
+        batch.setData(currentData, forDocument: balancesRef, merge: true)
     }
     
     // Exchange Rates Display Components
@@ -2799,8 +2909,8 @@ struct SimpleDropdownButton: View {
         .padding(.vertical, 12)
         .background(
             RoundedRectangle(cornerRadius: 10)
-                .fill(Color.white)
-                .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
+                .fill(Color.systemBackground)
+                .shadow(color: Color.primary.opacity(0.05), radius: 2, x: 0, y: 1)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10)
@@ -2863,7 +2973,7 @@ struct CustomerDropdownButton: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity)
-            .background(Color.white)
+            .background(Color.systemBackground)
             .cornerRadius(8)
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
@@ -2926,7 +3036,7 @@ struct CustomerDropdownOverlay: View {
     
     // macOS overlay implementation
     private var macosOverlay: some View {
-        Color.black.opacity(0.001)
+        Color.primary.opacity(0.001)
             .edgesIgnoringSafeArea(.all)
             .onTapGesture {
                 withAnimation {
@@ -2940,8 +3050,8 @@ struct CustomerDropdownOverlay: View {
                             ForEach(customers) { customer in
                                 customerRow(for: customer)
                                 
-                                // Add separator after "Myself" option
-                                if customer.id == "myself_special_id" && customers.count > 1 {
+                                // Add separator after "Myself BANK" option
+                                if customer.id == "myself_bank_special_id" && customers.count > 1 {
                                     Divider()
                                         .padding(.horizontal, 16)
                                 }
@@ -2953,8 +3063,8 @@ struct CustomerDropdownOverlay: View {
                 }
                 .background(
                     RoundedRectangle(cornerRadius: 16)
-                        .fill(Color.white)
-                        .shadow(color: Color.black.opacity(0.10), radius: 10, x: 0, y: 6)
+                        .fill(Color.systemBackground)
+                        .shadow(color: Color.primary.opacity(0.10), radius: 10, x: 0, y: 6)
                 )
                 .frame(width: overlayWidth)
                 .position(
@@ -2968,7 +3078,7 @@ struct CustomerDropdownOverlay: View {
     private var iosDialog: some View {
         ZStack {
             // Blurred background
-            Color.black.opacity(0.3)
+            Color.primary.opacity(0.3)
                 .edgesIgnoringSafeArea(.all)
                 .onTapGesture {
                     withAnimation(.easeInOut(duration: 0.3)) {
@@ -3004,7 +3114,7 @@ struct CustomerDropdownOverlay: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 16)
-                .background(Color.white)
+                .background(Color.systemBackground)
                 
                 Divider()
                 
@@ -3052,8 +3162,8 @@ struct CustomerDropdownOverlay: View {
                             ForEach(filteredCustomers) { customer in
                                 customerRow(for: customer)
                                 
-                                // Add separator after "Myself" option
-                                if customer.id == "myself_special_id" && filteredCustomers.count > 1 {
+                                // Add separator after "Myself BANK" option
+                                if customer.id == "myself_bank_special_id" && filteredCustomers.count > 1 {
                                     Divider()
                                         .padding(.horizontal, 20)
                                 }
@@ -3061,11 +3171,11 @@ struct CustomerDropdownOverlay: View {
                         }
                     }
                 }
-                .background(Color.white)
+                .background(Color.systemBackground)
             }
-            .background(Color.white)
+            .background(Color.systemBackground)
             .cornerRadius(20)
-            .shadow(color: Color.black.opacity(0.2), radius: 20, x: 0, y: 10)
+            .shadow(color: Color.primary.opacity(0.2), radius: 20, x: 0, y: 10)
             .padding(.horizontal, 20)
             .padding(.vertical, 40)
         }
@@ -3088,42 +3198,25 @@ struct CustomerDropdownOverlay: View {
                             Image(systemName: "person.crop.circle.fill")
                                 .font(.callout)
                                 .foregroundColor(.blue)
+                        } else if customer.id == "myself_bank_special_id" {
+                            Image(systemName: "building.columns.fill")
+                                .font(.callout)
+                                .foregroundColor(.green)
                         }
                         Text(customer.name)
                             .font(.body)
-                            .fontWeight(customer.id == "myself_special_id" ? .semibold : .medium)
-                            .foregroundColor(customer.id == "myself_special_id" ? .blue : .primary)
+                            .fontWeight((customer.id == "myself_special_id" || customer.id == "myself_bank_special_id") ? .semibold : .medium)
+                            .foregroundColor(customer.id == "myself_special_id" ? .blue : (customer.id == "myself_bank_special_id" ? .green : .primary))
                     }
                     
-                    // Currency balances
-                    if customer.id != "myself_special_id" {
-                        CustomerBalancesView(customer: customer)
-                    } else {
-                        // For "Myself", show placeholder balances
-                        HStack(spacing: 8) {
-                            HStack(spacing: 2) {
-                                Text("CAD")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
-                                Text("0.00")
-                                    .font(.caption)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(
-                                RoundedRectangle(cornerRadius: 4)
-                                    .fill(Color.blue.opacity(0.1))
-                            )
-                        }
-                    }
+                    // Currency balances - show real balances for all customers
+                    CustomerBalancesView(customer: customer)
                 }
                 
                 Spacer()
                 
                 // Customer type badge
-                if customer.id != "myself_special_id" {
+                if customer.id != "myself_special_id" && customer.id != "myself_bank_special_id" {
                     Text("[\(customer.type.displayName)]")
                         .font(.caption2)
                         .fontWeight(.bold)
@@ -3173,8 +3266,8 @@ struct CurrencyDropdownButton: View {
         .frame(height: 50)
         .background(
             RoundedRectangle(cornerRadius: 10)
-                .fill(Color.white)
-                .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
+                .fill(Color.systemBackground)
+                .shadow(color: Color.primary.opacity(0.05), radius: 2, x: 0, y: 1)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10)
@@ -3237,13 +3330,13 @@ struct CurrencyDropdownOverlay: View {
         #if os(macOS)
         macosOverlay
         #else
-        iosDialog
+        iosInlineDropdown
         #endif
     }
     
-    // macOS overlay implementation
+    // macOS overlay implementation - matches customer dropdown
     private var macosOverlay: some View {
-        Color.black.opacity(0.001)
+        Color.primary.opacity(0.001)
             .edgesIgnoringSafeArea(.all)
             .onTapGesture {
                 withAnimation {
@@ -3254,7 +3347,7 @@ struct CurrencyDropdownOverlay: View {
                 VStack(alignment: .leading, spacing: 0) {
                     ScrollView {
                         VStack(spacing: 0) {
-                            // Currency options (now includes CAD always)
+                            // Currency options
                             ForEach(currencies) { currency in
                                 currencyRow(for: currency)
                             }
@@ -3288,174 +3381,135 @@ struct CurrencyDropdownOverlay: View {
                     .frame(height: min(CGFloat(currencies.count) * 36 + 50, 200))
                 }
                 .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.white)
-                        .shadow(color: Color.black.opacity(0.10), radius: 10, x: 0, y: 6)
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(Color.systemBackground)
+                        .shadow(color: Color.primary.opacity(0.10), radius: 10, x: 0, y: 6)
                 )
                 .frame(width: overlayWidth)
                 .position(
                     x: buttonFrame.midX,
-                    y: buttonFrame.maxY + 8 + (min(CGFloat(currencies.count) * 36 + 50, 200) / 2)
+                    y: buttonFrame.maxY + 15 + (min(CGFloat(currencies.count) * 36 + 50, 200) / 2)
                 )
             )
     }
     
-    // iOS dialog implementation
-    private var iosDialog: some View {
-        ZStack {
-            // Blurred background
-            Color.black.opacity(0.4)
-                .edgesIgnoringSafeArea(.all)
-                .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        isOpen = false
-                    }
-                }
-                .onAppear {
-                    // Clear search text when dialog opens
-                    searchText = ""
-                }
-            
-            // Dialog content
-            VStack(spacing: 0) {
-                // Header with improved styling
-                HStack {
-                    HStack(spacing: 12) {
-                        Image(systemName: "dollarsign.circle.fill")
-                            .font(.title2)
-                            .foregroundColor(.blue)
-                        
-                        Text("Select Currency")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                            .foregroundColor(.primary)
+    // iOS inline dropdown - appears below field
+    private var iosInlineDropdown: some View {
+        VStack(spacing: 0) {
+            // Currency list
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(currencies.enumerated()), id: \.element.id) { index, currency in
+                        VStack(spacing: 0) {
+                            cleanCurrencyRow(
+                                currency: currency,
+                                action: {
+                                    isOpen = false
+                                    selectedCurrency = currency
+                                }
+                            )
+                            
+                            // Separator between items
+                            if index < currencies.count - 1 {
+                                Divider()
+                                    .background(Color.secondary.opacity(0.3))
+                                    .padding(.horizontal, 16)
+                            }
+                        }
                     }
                     
-                    Spacer()
+                    // Add Currency button at bottom
+                    Divider()
+                        .background(Color.secondary.opacity(0.4))
+                        .padding(.horizontal, 16)
                     
                     Button(action: {
-                        withAnimation(.easeInOut(duration: 0.3)) {
-                            isOpen = false
-                        }
+                        isOpen = false
+                        onAddCurrency()
                     }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.title2)
-                            .foregroundColor(.secondary)
-                            .background(Color.white, in: Circle())
+                        HStack(spacing: 10) {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.blue)
+                            
+                            Text("Add New Currency")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundColor(.blue)
+                            
+                            Spacer()
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+                        .background(Color.blue.opacity(0.05))
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(PlainButtonStyle())
                 }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 20)
-                .background(Color.white)
-                
-                Divider()
-                    .opacity(0.3)
-                
-                // Enhanced search field
-                HStack(spacing: 12) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(.secondary)
-                    
-                    TextField("Search currencies...", text: $searchText)
-                        .textFieldStyle(PlainTextFieldStyle())
-                        .font(.system(size: 16, weight: .medium))
-                        #if os(iOS)
-                        .autocapitalization(.none)
-                        .disableAutocorrection(true)
-                        .submitLabel(.search)
-                        #endif
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 14)
-                .background(Color.gray.opacity(0.08))
-                .cornerRadius(12)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: dynamicDropdownHeight)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(.regularMaterial)
                 .overlay(
                     RoundedRectangle(cornerRadius: 12)
-                        .stroke(Color.gray.opacity(0.2), lineWidth: 1)
+                        .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
                 )
-                .padding(.horizontal, 24)
-                .padding(.vertical, 16)
-                
-                // Currency list with improved spacing
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        if filteredCurrencies.isEmpty {
-                            // Enhanced no results message
-                            VStack(spacing: 16) {
-                                Image(systemName: "magnifyingglass")
-                                    .font(.system(size: 32))
-                                    .foregroundColor(.secondary)
-                                
-                                Text("No currencies found")
-                                    .font(.title3)
-                                    .fontWeight(.medium)
-                                    .foregroundColor(.secondary)
-                                
-                                Text("Try adjusting your search terms")
-                                    .font(.body)
-                                    .foregroundColor(.secondary.opacity(0.8))
-                            }
-                            .padding(.vertical, 60)
-                            .frame(maxWidth: .infinity)
-                        } else {
-                            ForEach(filteredCurrencies) { currency in
-                                currencyRow(for: currency)
-                                
-                                if currency.id != filteredCurrencies.last?.id {
-                                    Divider()
-                                        .padding(.horizontal, 24)
-                                        .opacity(0.3)
-                                }
-                            }
-                            
-                            // Enhanced Add Currency Button
-                            Divider()
-                                .padding(.horizontal, 24)
-                                .opacity(0.3)
-                            
-                            Button(action: onAddCurrency) {
-                                HStack(spacing: 14) {
-                                    Image(systemName: "plus.circle.fill")
-                                        .font(.title2)
-                                        .foregroundColor(.blue)
-                                    
-                                    Text("Add New Currency")
-                                        .font(.body)
-                                        .fontWeight(.semibold)
-                                        .foregroundColor(.blue)
-                                    
-                                    Spacer()
-                                }
-                                .padding(.horizontal, 24)
-                                .padding(.vertical, 18)
-                                .background(Color.blue.opacity(0.05))
-                                .cornerRadius(12)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 12)
-                                        .stroke(Color.blue.opacity(0.2), lineWidth: 1)
-                                )
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(PlainButtonStyle())
-                            .padding(.horizontal, 24)
-                            .padding(.vertical, 16)
-                        }
-                    }
-                }
-                .background(Color.white)
-            }
-            .background(Color.white)
-            .cornerRadius(24)
-            .shadow(color: Color.black.opacity(0.15), radius: 25, x: 0, y: 15)
-            .padding(.horizontal, 24)
-            .padding(.vertical, 60)
-        }
-        .transition(.opacity.combined(with: .scale))
+        )
+        .shadow(color: Color.primary.opacity(0.08), radius: 12, x: 0, y: 6)
+        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: isOpen)
     }
     
-    // Shared currency row implementation
+    private var dynamicDropdownHeight: CGFloat {
+        let itemHeight: CGFloat = 50
+        let addButtonHeight: CGFloat = 50
+        let currencyCount = currencies.count
+        
+        if currencyCount <= 5 {
+            // For small lists, calculate exact height
+            let totalHeight = (CGFloat(currencyCount) * itemHeight) + addButtonHeight
+            return min(totalHeight, 300)
+        } else {
+            // For larger lists, use fixed height with scroll
+            return 300
+        }
+    }
+    
+    // Clean currency row for inline/positioned dropdowns
+    private func cleanCurrencyRow(currency: Currency, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                // Currency symbol with background
+                Text(currency.symbol)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(Color.blue))
+                
+                // Currency name
+                Text(currency.name)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(.primary)
+                
+                Spacer()
+                
+                // Selection indicator
+                if selectedCurrency?.id == currency.id {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundColor(.blue)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(selectedCurrency?.id == currency.id ? Color.blue.opacity(0.05) : Color.clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+    
+    // Currency row for macOS dropdown - matches customer dropdown style
     private func currencyRow(for currency: Currency) -> some View {
         Button(action: {
             withAnimation {
@@ -3463,47 +3517,32 @@ struct CurrencyDropdownOverlay: View {
                 isOpen = false
             }
         }) {
-            HStack(spacing: 12) {
-                // Currency symbol with background
+            HStack(spacing: 8) {
+                // Currency symbol
                 Text(currency.symbol)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.body)
+                    .fontWeight(.medium)
                     .foregroundColor(.white)
-                    .frame(width: 32, height: 32)
-                    .background(
-                        Circle()
-                            .fill(Color.blue)
-                    )
+                    .frame(width: 24, height: 24)
+                    .background(Circle().fill(Color.blue))
                 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(currency.name)
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(.primary)
-                        .lineLimit(1)
-                    
-//                    Text("Exchange Rate: \(String(format: "%.4f", currency.exchangeRate))")
-//                        .font(.caption)
-//                        .foregroundColor(.secondary)
-//                        .lineLimit(1)
-                }
+                // Currency name
+                Text(currency.name)
+                    .font(.callout)
+                    .fontWeight(.medium)
+                    .foregroundColor(.primary)
                 
                 Spacer()
                 
+                // Checkmark for selected currency
                 if selectedCurrency?.id == currency.id {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.title2)
+                    Image(systemName: "checkmark")
+                        .font(.caption)
                         .foregroundColor(.blue)
                 }
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 16)
-            .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(selectedCurrency?.id == currency.id ? Color.blue.opacity(0.08) : Color.clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(selectedCurrency?.id == currency.id ? Color.blue.opacity(0.3) : Color.clear, lineWidth: 1)
-            )
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
             .contentShape(Rectangle())
         }
         .buttonStyle(PlainButtonStyle())
@@ -3727,13 +3766,13 @@ struct TransactionRowView: View {
             }
         }
         .padding(12)
-        .background(Color.white)
+        .background(Color.systemBackground)
         .cornerRadius(8)
         .overlay(
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color.gray.opacity(0.2), lineWidth: 1)
         )
-        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
+        .shadow(color: Color.primary.opacity(0.05), radius: 2, x: 0, y: 1)
         .alert("Delete Transaction", isPresented: $showingDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }
             Button("Delete", role: .destructive) {
@@ -4110,23 +4149,25 @@ struct TransactionRowView: View {
                             .lineLimit(1)
                     }
                     
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(Array(giverBalances.keys.sorted()), id: \.self) { currencyKey in
-                            if let balance = giverBalances[currencyKey] {
-                                let roundedBalance = round(balance * 100) / 100
-                                if abs(roundedBalance) >= 0.01 || currencyKey == "amount" || currencyKey == "CAD" {
-                                    HStack(spacing: 4) {
-                                        Text(currencyKey == "amount" ? "CAD" : currencyKey)
-                                            .font(.system(size: 8, weight: .medium))
-                                            .foregroundColor(.secondary)
-                                            .padding(.horizontal, 3)
-                                            .padding(.vertical, 1)
-                                            .background(Color.gray.opacity(0.1))
-                                            .cornerRadius(2)
-                                        
-                                        Text("\(roundedBalance, specifier: "%.2f")")
-                                            .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                            .foregroundColor(abs(roundedBalance) < 0.01 ? .secondary : (roundedBalance > 0 ? Color.green.opacity(0.8) : Color.red.opacity(0.8)))
+                    if transaction.giver != "myself_special_id" && transaction.giver != "myself_bank_special_id" {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(Array(giverBalances.keys.sorted()), id: \.self) { currencyKey in
+                                if let balance = giverBalances[currencyKey] {
+                                    let roundedBalance = round(balance * 100) / 100
+                                    if abs(roundedBalance) >= 0.01 || currencyKey == "amount" || currencyKey == "CAD" {
+                                        HStack(spacing: 4) {
+                                            Text(currencyKey == "amount" ? "CAD" : currencyKey)
+                                                .font(.system(size: 8, weight: .medium))
+                                                .foregroundColor(.secondary)
+                                                .padding(.horizontal, 3)
+                                                .padding(.vertical, 1)
+                                                .background(Color.gray.opacity(0.1))
+                                                .cornerRadius(2)
+                                            
+                                            Text("\(roundedBalance, specifier: "%.2f")")
+                                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                                .foregroundColor(abs(roundedBalance) < 0.01 ? .secondary : (roundedBalance > 0 ? Color.green.opacity(0.8) : Color.red.opacity(0.8)))
+                                        }
                                     }
                                 }
                             }
@@ -4158,23 +4199,25 @@ struct TransactionRowView: View {
                             .lineLimit(1)
                     }
                     
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(Array(takerBalances.keys.sorted()), id: \.self) { currencyKey in
-                            if let balance = takerBalances[currencyKey] {
-                                let roundedBalance = round(balance * 100) / 100
-                                if abs(roundedBalance) >= 0.01 || currencyKey == "amount" || currencyKey == "CAD" {
-                                    HStack(spacing: 4) {
-                                        Text(currencyKey == "amount" ? "CAD" : currencyKey)
-                                            .font(.system(size: 8, weight: .medium))
-                                            .foregroundColor(.secondary)
-                                            .padding(.horizontal, 3)
-                                            .padding(.vertical, 1)
-                                            .background(Color.gray.opacity(0.1))
-                                            .cornerRadius(2)
-                                        
-                                        Text("\(roundedBalance, specifier: "%.2f")")
-                                            .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                            .foregroundColor(abs(roundedBalance) < 0.01 ? .secondary : (roundedBalance > 0 ? Color.green.opacity(0.8) : Color.red.opacity(0.8)))
+                    if transaction.taker != "myself_special_id" && transaction.taker != "myself_bank_special_id" {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(Array(takerBalances.keys.sorted()), id: \.self) { currencyKey in
+                                if let balance = takerBalances[currencyKey] {
+                                    let roundedBalance = round(balance * 100) / 100
+                                    if abs(roundedBalance) >= 0.01 || currencyKey == "amount" || currencyKey == "CAD" {
+                                        HStack(spacing: 4) {
+                                            Text(currencyKey == "amount" ? "CAD" : currencyKey)
+                                                .font(.system(size: 8, weight: .medium))
+                                                .foregroundColor(.secondary)
+                                                .padding(.horizontal, 3)
+                                                .padding(.vertical, 1)
+                                                .background(Color.gray.opacity(0.1))
+                                                .cornerRadius(2)
+                                            
+                                            Text("\(roundedBalance, specifier: "%.2f")")
+                                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                                .foregroundColor(abs(roundedBalance) < 0.01 ? .secondary : (roundedBalance > 0 ? Color.green.opacity(0.8) : Color.red.opacity(0.8)))
+                                        }
                                     }
                                 }
                             }
@@ -4240,7 +4283,7 @@ struct TransactionRowView: View {
             .background(
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color.systemBackground)
-                    .shadow(color: .black.opacity(0.04), radius: 3, x: 0, y: 1)
+                    .shadow(color: Color.primary.opacity(0.04), radius: 3, x: 0, y: 1)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
@@ -4424,6 +4467,12 @@ struct TransactionRowView: View {
                 batch: batch
             )
             print("✅ Reversed my cash balance: +\(transaction.amount) \(transaction.currencyName)")
+        } else if transaction.giver == "myself_bank_special_id" {
+            try await updateMyBankBalance(
+                amount: transaction.amount, // ADD back what I gave from bank
+                batch: batch
+            )
+            print("✅ Reversed my bank balance: +\(transaction.amount) CAD")
         } else {
             try await updateCustomerBalance(
                 customerId: transaction.giver,
@@ -4442,6 +4491,12 @@ struct TransactionRowView: View {
                 batch: batch
             )
             print("✅ Reversed my cash balance: -\(transaction.amount) \(transaction.currencyName)")
+        } else if transaction.taker == "myself_bank_special_id" {
+            try await updateMyBankBalance(
+                amount: -transaction.amount, // SUBTRACT what I received in bank
+                batch: batch
+            )
+            print("✅ Reversed my bank balance: -\(transaction.amount) CAD")
         } else {
             try await updateCustomerBalance(
                 customerId: transaction.taker,
@@ -4453,9 +4508,30 @@ struct TransactionRowView: View {
         }
     }
     
+    // Add this function right after updateMyCashBalance
+    private func updateMyBankBalance(amount: Double, batch: WriteBatch) async throws {
+        let db = Firestore.firestore()
+        let balancesRef = db.collection("Balances").document("bank")
+        
+        // Get current balance
+        let balancesDoc = try await balancesRef.getDocument()
+        var currentData = balancesDoc.data() ?? [:]
+        
+        // Update CAD amount
+        let currentAmount = currentData["amount"] as? Double ?? 0.0
+        let newAmount = currentAmount + amount
+        currentData["amount"] = newAmount
+        print("💰 My BANK balance: \(currentAmount) + \(amount) = \(newAmount)")
+        
+        // Add timestamp
+        currentData["updatedAt"] = Timestamp()
+        
+        batch.setData(currentData, forDocument: balancesRef, merge: true)
+    }
+    
     private func updateMyCashBalance(currency: String, amount: Double, batch: WriteBatch) async throws {
         let db = Firestore.firestore()
-        let balancesRef = db.collection("Balances").document("Cash")
+        let balancesRef = db.collection("Balances").document("cash")
         
         // Get current balances
         let balancesDoc = try await balancesRef.getDocument()
@@ -4483,7 +4559,7 @@ struct TransactionRowView: View {
     
     private func reverseMyCashBalance(amount: Double, currency: String, batch: WriteBatch, isAddition: Bool = true) async throws {
         let db = Firestore.firestore()
-        let balancesRef = db.collection("Balances").document("Cash")
+        let balancesRef = db.collection("Balances").document("cash")
         
         // Get current balances
         let balancesDoc = try await balancesRef.getDocument()
@@ -4509,7 +4585,37 @@ struct TransactionRowView: View {
         batch.setData(currentData, forDocument: balancesRef, merge: true)
     }
     
+    private func reverseMyBankBalance(amount: Double, batch: WriteBatch, isAddition: Bool = true) async throws {
+        let db = Firestore.firestore()
+        let balancesRef = db.collection("Balances").document("bank")
+        
+        // Get current balances
+        let balancesDoc = try await balancesRef.getDocument()
+        var currentData = balancesDoc.data() ?? [:]
+        
+        // Reverse bank balance (always CAD)
+        let currentAmount = currentData["amount"] as? Double ?? 0.0
+        let reverseAmount = isAddition ? amount : -amount
+        currentData["amount"] = currentAmount + reverseAmount
+        print("🔄 Reversing my bank CAD: \(currentAmount) + \(reverseAmount) = \(currentAmount + reverseAmount)")
+        
+        // Add timestamp
+        currentData["updatedAt"] = Timestamp()
+        
+        batch.setData(currentData, forDocument: balancesRef, merge: true)
+    }
+    
     private func reverseCustomerBalance(customerId: String, amount: Double, currency: String, batch: WriteBatch, isAddition: Bool = true) async throws {
+        // Special handling for myself BANK
+        if customerId == "myself_bank_special_id" {
+            try await reverseMyBankBalance(
+                amount: amount,
+                batch: batch,
+                isAddition: isAddition
+            )
+            return
+        }
+        
         let db = Firestore.firestore()
         
         // Determine which collection this customer belongs to
@@ -4550,6 +4656,11 @@ struct TransactionRowView: View {
     }
     
     private func getCustomerType(customerId: String) async throws -> CustomerType {
+        // Handle special customer types
+        if customerId == "myself_special_id" || customerId == "myself_bank_special_id" {
+            return .customer
+        }
+        
         let db = Firestore.firestore()
         
         // Check in Customers collection first

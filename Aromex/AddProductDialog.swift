@@ -1541,9 +1541,6 @@ struct AddProductDialog: View {
                     .font(.subheadline)
                     .fontWeight(.medium)
                     .foregroundColor(.primary)
-                Text("*")
-                    .foregroundColor(.red)
-                    .font(.subheadline)
             }
             
             CarrierDropdownButton(

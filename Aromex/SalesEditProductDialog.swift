@@ -18,6 +18,7 @@ struct SalesEditProductDialog: View {
     let onDismiss: (() -> Void)?
     let onSave: (([PhoneItem]) -> Void)?
     let itemToEdit: PhoneItem // Required - this dialog is specifically for editing
+    var existingCartItems: [PhoneItem] = [] // IMEIs already in cart to exclude
     
     // Brand dropdown state
     @State private var brandSearchText = ""
@@ -130,12 +131,26 @@ struct SalesEditProductDialog: View {
         return currentStep == .imeiSelection && !selectedIMEIs.isEmpty
     }
     
+    // Get IMEIs that are already in the cart (excluding the item being edited)
+    private var cartIMEIs: Set<String> {
+        Set(existingCartItems.filter { $0.id != itemToEdit.id }.flatMap { $0.imeis })
+    }
+    
     private var backgroundColor: Color {
         #if os(macOS)
         return Color(NSColor.windowBackgroundColor)
         #else
         return Color(.systemBackground)
         #endif
+    }
+    
+    // Computed property to get phone counts by location
+    private var phoneCountsByLocation: [String: Int] {
+        var counts: [String: Int] = [:]
+        for device in allDevices {
+            counts[device.storageLocation, default: 0] += 1
+        }
+        return counts
     }
     
     var body: some View {
@@ -207,10 +222,13 @@ struct SalesEditProductDialog: View {
                             } else if !filteredDevices.isEmpty {
                                 DeviceFilteringTable(
                                     devices: $filteredDevices,
+                                    selectedBrand: $selectedBrand,
+                                    selectedModel: $selectedModel,
                                     selectedCapacity: $selectedCapacity,
                                     selectedColor: $selectedColor,
                                     selectedIMEIs: $selectedIMEIs,
-                                    showActiveOnly: $showActiveOnly
+                                    showActiveOnly: $showActiveOnly,
+                                    cartIMEIs: cartIMEIs
                                 )
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                                 .padding(.horizontal, 24)
@@ -311,6 +329,190 @@ struct SalesEditProductDialog: View {
         }
     }
     
+    // MARK: - Desktop Dialog Components
+    
+    private var desktopDialogContent: some View {
+        VStack(spacing: 0) {
+            // Header
+            desktopDialogHeader
+            
+            Divider()
+            
+            // Fixed Dropdown Row
+            VStack(spacing: 24) {
+                DesktopFormFields
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            
+            Divider()
+            
+            // Fixed Table Area - fills remaining space
+            desktopDialogTableArea
+            
+            Divider()
+            
+            // Footer
+            desktopDialogFooter
+        }
+        .frame(width: 1200, height: 800) // Much larger dialog
+        .background(backgroundColor)
+        .cornerRadius(12)
+        .shadow(radius: 20)
+    }
+    
+    private var desktopDialogHeader: some View {
+        HStack {
+            Text("Edit Product")
+                .font(.title2)
+                .fontWeight(.bold)
+            
+            Spacer()
+            
+            Button(action: {
+                handleCloseAction()
+            }) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(PlainButtonStyle())
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 20)
+    }
+    
+    private var desktopDialogTableArea: some View {
+        Group {
+            if currentStep == .imeiSelection {
+                desktopImeiSelectionArea
+            } else {
+                desktopPriceSettingArea
+            }
+        }
+    }
+    
+    private var desktopImeiSelectionArea: some View {
+        Group {
+            if !selectedBrand.isEmpty && !selectedModel.isEmpty && !selectedStorageLocation.isEmpty {
+                if isLoadingDevices {
+                    desktopLoadingView
+                } else if !filteredDevices.isEmpty {
+                    desktopDeviceTable
+                } else {
+                    desktopNoDevicesView
+                }
+            } else {
+                desktopPlaceholderView
+            }
+        }
+    }
+    
+    private var desktopPriceSettingArea: some View {
+        PriceSettingInterface(
+            selectedDevices: selectedDevicesForPricing,
+            deviceSellingPrices: $deviceSellingPrices,
+            deviceProfitLoss: $deviceProfitLoss
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 24)
+        .padding(.bottom, 24)
+        .transition(.asymmetric(
+            insertion: .opacity.combined(with: .move(edge: .trailing)),
+            removal: .opacity.combined(with: .move(edge: .leading))
+        ))
+    }
+    
+    private var desktopLoadingView: some View {
+        VStack {
+            Spacer()
+            ProgressView()
+                .scaleEffect(1.5)
+                .padding(.bottom, 12)
+            Text("Loading devices...")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    private var desktopDeviceTable: some View {
+        DeviceFilteringTable(
+            devices: $filteredDevices,
+            selectedBrand: $selectedBrand,
+            selectedModel: $selectedModel,
+            selectedCapacity: $selectedCapacity,
+            selectedColor: $selectedColor,
+            selectedIMEIs: $selectedIMEIs,
+            showActiveOnly: $showActiveOnly,
+            cartIMEIs: cartIMEIs
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal, 24)
+        .padding(.bottom, 24)
+        .transition(.asymmetric(
+            insertion: .opacity.combined(with: .move(edge: .trailing)),
+            removal: .opacity.combined(with: .move(edge: .leading))
+        ))
+    }
+    
+    private var desktopNoDevicesView: some View {
+        VStack {
+            Spacer()
+            Text("No devices found")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    private var desktopPlaceholderView: some View {
+        VStack {
+            Spacer()
+            Text("Select brand, model, and storage location to view devices")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    private var desktopDialogFooter: some View {
+        HStack {
+            if currentStep == .priceSetting {
+                Button("Previous") {
+                    goBackToImeiSelection()
+                }
+                .buttonStyle(PlainButtonStyle())
+            } else {
+                Button("Cancel") {
+                    handleCloseAction()
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+            
+            Spacer()
+            
+            if currentStep == .imeiSelection {
+                Button("Next") {
+                    proceedToPriceSetting()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!isNextEnabled)
+            } else {
+                Button("Save Changes") {
+                    addProducts()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!isAddEnabled)
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
+    }
+    
     var DesktopDialogView: some View {
         ZStack {
             Color.black.opacity(0.3)
@@ -319,146 +521,7 @@ struct SalesEditProductDialog: View {
                     handleCloseAction()
                 }
             
-            VStack(spacing: 0) {
-                // Header
-                HStack {
-                    Text("Edit Product")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                    
-                    Spacer()
-                    
-                    Button(action: {
-                        handleCloseAction()
-                    }) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundColor(.secondary)
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 20)
-                
-                Divider()
-                
-                // Fixed Dropdown Row
-                    VStack(spacing: 24) {
-                        DesktopFormFields
-                    }
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 20)
-                
-                Divider()
-                
-                // Fixed Table Area - fills remaining space
-                if currentStep == .imeiSelection {
-                    if !selectedBrand.isEmpty && !selectedModel.isEmpty && !selectedStorageLocation.isEmpty {
-                        if isLoadingDevices {
-                            // Loading indicator
-                            VStack {
-                                Spacer()
-                                ProgressView()
-                                    .scaleEffect(1.5)
-                                    .padding(.bottom, 12)
-                                Text("Loading devices...")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                                Spacer()
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else if !filteredDevices.isEmpty {
-                            DeviceFilteringTable(
-                                devices: $filteredDevices,
-                                selectedCapacity: $selectedCapacity,
-                                selectedColor: $selectedColor,
-                                selectedIMEIs: $selectedIMEIs,
-                                showActiveOnly: $showActiveOnly
-                            )
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .padding(.horizontal, 24)
-                            .padding(.bottom, 24)
-                            .transition(.asymmetric(
-                                insertion: .opacity.combined(with: .move(edge: .trailing)),
-                                removal: .opacity.combined(with: .move(edge: .leading))
-                            ))
-                        } else {
-                            // No devices found
-                            VStack {
-                                Spacer()
-                                Text("No devices found")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                                Spacer()
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        }
-                    } else {
-                        // Placeholder when no data
-                        VStack {
-                            Spacer()
-                            Text("Select brand, model, and storage location to view devices")
-                                .font(.subheadline)
-                                .foregroundColor(.secondary)
-                            Spacer()
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                } else {
-                    // Price setting interface
-                    PriceSettingInterface(
-                        selectedDevices: selectedDevicesForPricing,
-                        deviceSellingPrices: $deviceSellingPrices,
-                        deviceProfitLoss: $deviceProfitLoss
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 24)
-                    .transition(.asymmetric(
-                        insertion: .opacity.combined(with: .move(edge: .trailing)),
-                        removal: .opacity.combined(with: .move(edge: .leading))
-                    ))
-                }
-                
-                Divider()
-                
-                // Footer
-                HStack {
-                    if currentStep == .priceSetting {
-                        Button("Previous") {
-                            goBackToImeiSelection()
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                    } else {
-                        Button("Cancel") {
-                            handleCloseAction()
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                    }
-                    
-                    Spacer()
-                    
-                    if currentStep == .imeiSelection {
-                        Button("Next") {
-                            proceedToPriceSetting()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!isNextEnabled)
-                    } else {
-                        Button("Save Changes") {
-                            addProducts()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!isAddEnabled)
-                    }
-                }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 16)
-            }
-            .frame(width: 1200, height: 800) // Much larger dialog
-            .background(backgroundColor)
-            .cornerRadius(12)
-            .shadow(radius: 20)
+            desktopDialogContent
         }
         .overlay(desktopBrandDropdownOverlay)
         .overlay(desktopModelDropdownOverlay)
@@ -588,6 +651,7 @@ struct SalesEditProductDialog: View {
                     searchText: $storageLocationSearchText,
                     internalSearchText: $storageLocationInternalSearchText,
                     storageLocations: storageLocations,
+                    phoneCounts: phoneCountsByLocation,
                     buttonFrame: storageLocationButtonFrame,
                     onAddStorageLocation: addNewStorageLocation,
                     onRenameStorageLocation: { oldName, newName in
@@ -673,6 +737,7 @@ struct SalesEditProductDialog: View {
                 showingDropdown: $showingStorageLocationDropdown,
                 buttonFrame: $storageLocationButtonFrame,
                 storageLocations: storageLocations,
+                phoneCounts: phoneCountsByLocation,
                 isLoading: isLoadingStorageLocations,
                 isFocused: $isStorageLocationFocused,
                 internalSearchText: $storageLocationInternalSearchText,
@@ -782,6 +847,7 @@ struct SalesEditProductDialog: View {
                         showingDropdown: $showingStorageLocationDropdown,
                         buttonFrame: $storageLocationButtonFrame,
                         storageLocations: storageLocations,
+                        phoneCounts: phoneCountsByLocation,
                         isLoading: isLoadingStorageLocations,
                         isFocused: $isStorageLocationFocused,
                         internalSearchText: $storageLocationInternalSearchText,
@@ -1009,7 +1075,7 @@ struct SalesEditProductDialog: View {
                     }
                     
                     let data = document.data()
-                    if let name = data?["name"] as? String {
+                    if let name = data?["storageLocation"] as? String {
                         locationNames[locationId] = name
                     }
                 }
@@ -1101,7 +1167,8 @@ struct SalesEditProductDialog: View {
                 status: device.status, // Use actual device status from database
                 storageLocation: selectedStorageLocation,
                 imeis: [device.imei],
-                unitCost: sellingPrice // Use selling price as unitCost for sales
+                unitCost: sellingPrice, // Use selling price as unitCost for sales
+                actualCost: device.unitPrice // Store actual purchase cost from phone document
             )
             items.append(item)
         }
@@ -1531,9 +1598,21 @@ struct SalesEditProductDialog: View {
                 // Get unit price
                 let unitPrice = data["unitCost"] as? Double ?? 0.0
                 
-                return SalesAddProductDialog.DeviceInfo(capacity: capacityName, capacityUnit: capacityUnit, color: colorName, imei: imei, carrier: carrierName, status: status, unitPrice: unitPrice)
+                return SalesAddProductDialog.DeviceInfo(
+                    brand: selectedBrand,
+                    model: selectedModel,
+                    capacity: capacityName,
+                    capacityUnit: capacityUnit,
+                    color: colorName,
+                    imei: imei,
+                    carrier: carrierName,
+                    status: status,
+                    unitPrice: unitPrice,
+                    storageLocation: selectedStorageLocation
+                )
             }
                     
+                    // Don't filter - we'll show all devices but mark the ones in cart
                     self.filteredDevices = self.allDevices
                     
                     // For edit mode, preserve the pre-selected values

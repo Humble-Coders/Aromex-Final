@@ -1,29 +1,11 @@
 import SwiftUI
 import FirebaseFirestore
 
-// Color extension for cross-platform compatibility
-extension Color {
-    
-    static var systemGray6Color: Color {
-        #if os(macOS)
-        return Color(NSColor.controlColor)
-        #else
-        return Color(.systemGray6)
-        #endif
-    }
-    
-    static var systemGray5Color: Color {
-        #if os(macOS)
-        return Color(NSColor.unemphasizedSelectedContentBackgroundColor)
-        #else
-        return Color(.systemGray5)
-        #endif
-    }
-}
-
 struct BalanceReportView: View {
     @EnvironmentObject var firebaseManager: FirebaseManager
+    @EnvironmentObject var navigationManager: CustomerNavigationManager
     @StateObject private var currencyManager = CurrencyManager.shared
+    @StateObject private var balanceViewModel = BalanceViewModel()
     @State private var balanceData: [CustomerBalanceData] = []
     @State private var filteredData: [CustomerBalanceData] = []
     @State private var isLoading = false
@@ -37,6 +19,7 @@ struct BalanceReportView: View {
     @State private var totalOwe: [String: Double] = [:]
     @State private var totalDue: [String: Double] = [:]
     @State private var myCash: [String: Double] = [:]
+    @State private var totalInventoryValue: Double = 0.0
     
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     
@@ -68,83 +51,112 @@ struct BalanceReportView: View {
         return currencies.filter { $0 != "All" }
     }
     
+    private var totalCashAmount: Double {
+        // Use the "amount" key for CAD if it exists, otherwise sum all cash values
+        if let cadAmount = myCash["amount"] {
+            return cadAmount
+        } else {
+            return myCash.values.reduce(0, +)
+        }
+    }
+    
     var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                // Header with search and filters
-                headerSection
-                
-                // Balance table
-                if isLoading {
-                    loadingView
-                } else if filteredData.isEmpty {
-                    emptyStateView
-                } else {
-                    balanceTableView
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 0) {
+                    // Header with search and filters
+                    headerSection
+                    
+                    // Balance table
+                    if isLoading {
+                        loadingView
+                    } else if filteredData.isEmpty {
+                        emptyStateView
+                    } else {
+                        if shouldUseVerticalLayout {
+                            mobileListView
+                        } else {
+                            balanceTableView
+                        }
+                    }
+                    
+                    // Add some bottom spacing
+                    Spacer(minLength: 20)
                 }
-                
-                // Add some bottom spacing
-                Spacer(minLength: 20)
             }
-        }
-        .background(Color.systemGroupedBackground)
-        .onAppear {
-            currencyManager.fetchCurrencies()
-            fetchAllBalances()
-            fetchTotalOweDue()
-            fetchMyCash()
-        }
-        .onChange(of: searchText) { _ in
-            applyFilters()
-        }
-        .onChange(of: selectedCurrencyFilter) { _ in
-            applyFilters()
-        }
-        .onChange(of: minAmount) { _ in
-            applyFilters()
-        }
-        .onChange(of: maxAmount) { _ in
-            applyFilters()
-        }
-        .onChange(of: sortBy) { _ in
-            applySorting()
-        }
-        .onChange(of: sortAscending) { _ in
-            applySorting()
-        }
-        #if os(iOS)
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("Done") {
-                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            .background(Color.systemGroupedBackground)
+            .navigationDestination(isPresented: $navigationManager.shouldShowCustomerDetail) {
+                if let selectedCustomer = navigationManager.selectedCustomerForNavigation {
+                    let entityProfile = EntityProfile(
+                        id: selectedCustomer.id ?? "",
+                        name: selectedCustomer.name,
+                        phone: selectedCustomer.phone,
+                        email: selectedCustomer.email,
+                        balance: selectedCustomer.balance,
+                        address: selectedCustomer.address,
+                        notes: selectedCustomer.notes
+                    )
+                    
+                    let entityType: EntityType = {
+                        switch selectedCustomer.type {
+                        case .customer: return .customer
+                        case .middleman: return .middleman
+                        case .supplier: return .supplier
+                        }
+                    }()
+                    
+                    EntityDetailView(entity: entityProfile, entityType: entityType)
                 }
-                .foregroundColor(.blue)
             }
+            .onAppear {
+                currencyManager.fetchCurrencies()
+                fetchAllBalances()
+                fetchTotalOweDue()
+                fetchMyCash()
+                fetchInventoryValue()
+            }
+            .onChange(of: searchText) { _ in
+                applyFilters()
+            }
+            .onChange(of: selectedCurrencyFilter) { _ in
+                applyFilters()
+            }
+            .onChange(of: minAmount) { _ in
+                applyFilters()
+            }
+            .onChange(of: maxAmount) { _ in
+                applyFilters()
+            }
+            .onChange(of: sortBy) { _ in
+                applySorting()
+            }
+            .onChange(of: sortAscending) { _ in
+                applySorting()
+            }
+            #if os(iOS)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") {
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    }
+                    .foregroundColor(.blue)
+                }
+            }
+            #endif
         }
-        #endif
     }
     
         private var headerSection: some View {
         VStack(spacing: shouldUseVerticalLayout ? 16 : 20) {
             // Title and refresh
             HStack(alignment: .center) {
-                VStack(alignment: .leading, spacing: shouldUseVerticalLayout ? 3 : 4) {
-                    Text("Balance Report")
-                        .font(.system(size: shouldUseVerticalLayout ? 24 : 32, weight: .bold, design: .rounded))
-                        .foregroundColor(.primary)
-                    
-                    Text("Net balance with contacts • Tap to view details")
-                        .font(.system(size: shouldUseVerticalLayout ? 13 : 16, weight: .medium))
-                        .foregroundColor(.secondary)
-                }
-                
-                Spacer()
                 
                 Button(action: {
                     fetchAllBalances()
                     fetchTotalOweDue()
                     fetchMyCash()
+                    fetchInventoryValue()
                 }) {
                     HStack(spacing: shouldUseVerticalLayout ? 6 : 8) {
                         Image(systemName: "arrow.clockwise")
@@ -236,7 +248,7 @@ struct BalanceReportView: View {
                     .padding(.vertical, shouldUseVerticalLayout ? 10 : 12)
                     .background(
                         RoundedRectangle(cornerRadius: shouldUseVerticalLayout ? 10 : 12)
-                            .fill(Color.systemGray6Color)
+                            .fill(Color.systemGray6)
                             .overlay(
                                 RoundedRectangle(cornerRadius: shouldUseVerticalLayout ? 10 : 12)
                                     .stroke(Color.gray.opacity(0.2), lineWidth: 1)
@@ -403,57 +415,199 @@ struct BalanceReportView: View {
                     )
             )
             
-            // My Cash Section
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 8) {
-                    Image(systemName: "banknote.fill")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(.blue)
-                    Text("My Cash")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundColor(.blue)
-                }
-                
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(Array(myCash.keys.sorted()), id: \.self) { currency in
-                            if let amount = myCash[currency], abs(amount) >= 0.01 {
-                                VStack(spacing: 2) {
-                                    Text(currency == "amount" ? "CAD" : currency)
-                                        .font(.system(size: 10, weight: .medium))
-                                        .foregroundColor(.secondary)
-                                    Text("\(amount, specifier: "%.2f")")
-                                        .font(.system(size: 14, weight: .bold, design: .monospaced))
-                                        .foregroundColor(.blue)
-                                }
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(Color.blue.opacity(0.1))
-                                .cornerRadius(6)
-                            }
+            // Account Balances Row (My Cash, Bank Balance, Credit Card)
+            if shouldUseVerticalLayout {
+                VStack(spacing: 10) {
+                    // My Cash
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "banknote.fill")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(.blue)
+                            Text("My Cash")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundColor(.blue)
                         }
                         
-                        if myCash.isEmpty || myCash.values.allSatisfy({ abs($0) < 0.01 }) {
-                            Text("No cash")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(.gray)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(Color.gray.opacity(0.1))
-                                .cornerRadius(6)
-                        }
+                        Text(balanceViewModel.formatAmount(totalCashAmount))
+                            .font(.system(size: 16, weight: .bold, design: .monospaced))
+                            .foregroundColor(balanceViewModel.getBalanceColor(totalCashAmount))
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Color.blue.opacity(0.05))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(Color.blue.opacity(0.2), lineWidth: 1)
+                            )
+                    )
+                    
+                    // Bank Balance
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "building.columns")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(.purple)
+                            Text("Bank Balance")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundColor(.purple)
+                        }
+                        
+                        Text(balanceViewModel.formatAmount(balanceViewModel.bankBalance))
+                            .font(.system(size: 16, weight: .bold, design: .monospaced))
+                            .foregroundColor(balanceViewModel.getBalanceColor(balanceViewModel.bankBalance))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Color.purple.opacity(0.05))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(Color.purple.opacity(0.2), lineWidth: 1)
+                            )
+                    )
+                    
+                    // Credit Card Balance
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "creditcard")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(.orange)
+                            Text("Credit Card")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundColor(.orange)
+                        }
+                        
+                        Text(balanceViewModel.formatAmount(balanceViewModel.creditCardBalance))
+                            .font(.system(size: 16, weight: .bold, design: .monospaced))
+                            .foregroundColor(balanceViewModel.getBalanceColor(balanceViewModel.creditCardBalance))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Color.orange.opacity(0.05))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(Color.orange.opacity(0.2), lineWidth: 1)
+                            )
+                    )
+                }
+            } else {
+                HStack(spacing: 12) {
+                    // My Cash
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "banknote.fill")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundColor(.blue)
+                            Text("My Cash")
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundColor(.blue)
+                        }
+                        
+                        Text(balanceViewModel.formatAmount(totalCashAmount))
+                            .font(.system(size: 18, weight: .bold, design: .monospaced))
+                            .foregroundColor(balanceViewModel.getBalanceColor(totalCashAmount))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.blue.opacity(0.05))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.blue.opacity(0.2), lineWidth: 1)
+                            )
+                    )
+                    
+                    // Bank Balance
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "building.columns")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundColor(.purple)
+                            Text("Bank Balance")
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundColor(.purple)
+                        }
+                        
+                        Text(balanceViewModel.formatAmount(balanceViewModel.bankBalance))
+                            .font(.system(size: 18, weight: .bold, design: .monospaced))
+                            .foregroundColor(balanceViewModel.getBalanceColor(balanceViewModel.bankBalance))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.purple.opacity(0.05))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.purple.opacity(0.2), lineWidth: 1)
+                            )
+                    )
+                    
+                    // Credit Card Balance
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "creditcard")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundColor(.orange)
+                            Text("Credit Card")
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundColor(.orange)
+                        }
+                        
+                        Text(balanceViewModel.formatAmount(balanceViewModel.creditCardBalance))
+                            .font(.system(size: 18, weight: .bold, design: .monospaced))
+                            .foregroundColor(balanceViewModel.getBalanceColor(balanceViewModel.creditCardBalance))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.orange.opacity(0.05))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.orange.opacity(0.2), lineWidth: 1)
+                            )
+                    )
                 }
             }
+            
+            // Inventory Value Section
+            VStack(alignment: .leading, spacing: shouldUseVerticalLayout ? 10 : 12) {
+                HStack(spacing: shouldUseVerticalLayout ? 6 : 8) {
+                    Image(systemName: "dollarsign.circle.fill")
+                        .font(.system(size: shouldUseVerticalLayout ? 14 : 16, weight: .medium))
+                        .foregroundColor(.green)
+                    Text("Inventory Value")
+                        .font(.system(size: shouldUseVerticalLayout ? 14 : 16, weight: .bold))
+                        .foregroundColor(.green)
+                }
+                
+                Text("$\(Int(totalInventoryValue))")
+                    .font(.system(size: shouldUseVerticalLayout ? 18 : 20, weight: .bold, design: .monospaced))
+                    .foregroundColor(.green)
+            }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.horizontal, shouldUseVerticalLayout ? 12 : 16)
+            .padding(.vertical, shouldUseVerticalLayout ? 10 : 12)
             .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.blue.opacity(0.05))
+                RoundedRectangle(cornerRadius: shouldUseVerticalLayout ? 10 : 12)
+                    .fill(Color.green.opacity(0.05))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.blue.opacity(0.2), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: shouldUseVerticalLayout ? 10 : 12)
+                            .stroke(Color.green.opacity(0.2), lineWidth: 1)
                     )
             )
         }
@@ -480,7 +634,7 @@ struct BalanceReportView: View {
                     .padding(.vertical, 8)
                     .background(
                         RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.systemGray6Color)
+                            .fill(Color.systemGray6)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 8)
                                     .stroke(Color.gray.opacity(0.2), lineWidth: 1)
@@ -506,7 +660,7 @@ struct BalanceReportView: View {
                         .padding(.vertical, 8)
                         .background(
                             RoundedRectangle(cornerRadius: 8)
-                                .fill(Color.systemGray6Color)
+                                .fill(Color.systemGray6)
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 8)
                                         .stroke(Color.gray.opacity(0.2), lineWidth: 1)
@@ -537,7 +691,7 @@ struct BalanceReportView: View {
                         .padding(.vertical, 10)
                         .background(
                             RoundedRectangle(cornerRadius: 8)
-                                .fill(Color.systemGray6Color)
+                                .fill(Color.systemGray6)
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 8)
                                         .stroke(Color.gray.opacity(0.2), lineWidth: 1)
@@ -560,7 +714,7 @@ struct BalanceReportView: View {
                         .padding(.vertical, 10)
                         .background(
                             RoundedRectangle(cornerRadius: 8)
-                                .fill(Color.systemGray6Color)
+                                .fill(Color.systemGray6)
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 8)
                                         .stroke(Color.gray.opacity(0.2), lineWidth: 1)
@@ -605,7 +759,7 @@ struct BalanceReportView: View {
         .padding(.vertical, 20)
         .background(
             RoundedRectangle(cornerRadius: 12)
-                .fill(Color.systemGray6Color.opacity(0.5))
+                .fill(Color.systemGray6.opacity(0.5))
                 .overlay(
                     RoundedRectangle(cornerRadius: 12)
                         .stroke(Color.blue.opacity(0.2), lineWidth: 1)
@@ -615,47 +769,126 @@ struct BalanceReportView: View {
     
     private var balanceTableView: some View {
         HStack {
-            if !shouldUseVerticalLayout {
-                Spacer()
-            }
+            Spacer(minLength: 0)
             
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack {
-                    if !shouldUseVerticalLayout {
-                        Spacer(minLength: 0)
-                    }
-                    
-                    VStack(spacing: 0) {
-                        // Table header
-                        tableHeaderView
-                        
-                        // Table rows
-                        ForEach(filteredData.indices, id: \.self) { index in
-                            let customer = filteredData[index]
-                            CustomerBalanceRow(
-                                customer: customer,
-                                currencies: displayCurrencies,
-                                isEven: index % 2 == 0,
-                                showGridLines: true
-                            )
-                        }
-                    }
-                    .background(Color.systemBackgroundColor)
-                    .cornerRadius(shouldUseVerticalLayout ? 10 : 12)
-                    .shadow(color: .black.opacity(0.08), radius: shouldUseVerticalLayout ? 6 : 8, x: 0, y: shouldUseVerticalLayout ? 2 : 4)
-                    
-                    if !shouldUseVerticalLayout {
-                        Spacer(minLength: 0)
-                    }
+            VStack(spacing: 0) {
+                // Table header
+                tableHeaderView
+                
+                // Table rows
+                ForEach(filteredData.indices, id: \.self) { index in
+                    let customer = filteredData[index]
+                    CustomerBalanceRow(
+                        customer: customer,
+                        currencies: displayCurrencies,
+                        isEven: index % 2 == 0,
+                        showGridLines: true
+                    )
                 }
             }
-            .padding(.horizontal, shouldUseVerticalLayout ? 12 : 24)
-            .padding(.bottom, shouldUseVerticalLayout ? 16 : 20)
+            .background(Color.systemBackgroundColor)
+            .cornerRadius(shouldUseVerticalLayout ? 10 : 12)
+            .shadow(color: .black.opacity(0.08), radius: shouldUseVerticalLayout ? 6 : 8, x: 0, y: shouldUseVerticalLayout ? 2 : 4)
             
-            if !shouldUseVerticalLayout {
-                Spacer()
+            Spacer(minLength: 0)
+        }
+        .padding(.top, shouldUseVerticalLayout ? 16 : 24)
+        .padding(.horizontal, shouldUseVerticalLayout ? 12 : 24)
+        .padding(.bottom, shouldUseVerticalLayout ? 16 : 20)
+    }
+
+    // iPhone-optimized list (compact width)
+    private var mobileListView: some View {
+        LazyVStack(spacing: 12) {
+            ForEach(filteredData.indices, id: \.self) { index in
+                let customer = filteredData[index]
+                Button(action: {
+                    // Navigate to detail on tap
+                    if let actualCustomer = firebaseManager.customers.first(where: { $0.id == customer.id }) {
+                        navigationManager.navigateToCustomer(actualCustomer)
+                    }
+                }) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Text(customer.name)
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(.primary)
+                                .lineLimit(1)
+                            Spacer()
+                            // Show primary net (CAD) prominently
+                            let cad = round(customer.cadBalance * 100) / 100
+                            HStack(spacing: 6) {
+                                Text(String(format: "%.2f CAD", abs(cad)))
+                                    .font(.system(size: 15, weight: .bold, design: .monospaced))
+                                Text(cad >= 0 ? "To Receive" : "To Give")
+                                    .font(.system(size: 11, weight: .semibold))
+                            }
+                            .foregroundColor(cad >= 0 ? .green : .red)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background((cad >= 0 ? Color.green : Color.red).opacity(0.12))
+                            .cornerRadius(6)
+                        }
+                        
+                        HStack(spacing: 8) {
+                            // Type chip
+                            Text(customer.type.displayName)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(.secondary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.gray.opacity(0.12))
+                                .cornerRadius(6)
+                            
+                            if !customer.phone.isEmpty {
+                                Text(customer.phone)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(Color.gray.opacity(0.08))
+                                    .cornerRadius(6)
+                            }
+                            Spacer()
+                        }
+                        
+                        // Horizontal chips for non-zero other currencies
+                        if !customer.currencyBalances.isEmpty {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    ForEach(Array(customer.currencyBalances.keys.sorted()), id: \
+.self) { currency in
+                                        let value = round((customer.currencyBalances[currency] ?? 0) * 100) / 100
+                                        if abs(value) >= 0.01 {
+                                            HStack(spacing: 6) {
+                                                Text("\(currency): \(String(format: "%.2f", abs(value)))")
+                                                    .font(.system(size: 11, weight: .semibold))
+                                                Text(value >= 0 ? "To Receive" : "To Give")
+                                                    .font(.system(size: 10, weight: .semibold))
+                                            }
+                                            .foregroundColor(value >= 0 ? .green : .red)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 4)
+                                            .background((value >= 0 ? Color.green : Color.red).opacity(0.12))
+                                            .cornerRadius(6)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .padding(12)
+                    .background(Color.systemBackgroundColor)
+                    .cornerRadius(10)
+                    .shadow(color: .black.opacity(0.06), radius: 6, x: 0, y: 2)
+                }
+                .buttonStyle(PlainButtonStyle())
             }
         }
+        .padding(.horizontal, 12)
+        .padding(.top, 12)
+        .padding(.bottom, 20)
     }
     
     private var tableHeaderView: some View {
@@ -669,7 +902,7 @@ struct BalanceReportView: View {
                     .font(.system(size: shouldUseVerticalLayout ? 11 : 12, weight: .medium))
                     .foregroundColor(.secondary)
             }
-            .frame(minWidth: shouldUseVerticalLayout ? 120 : 200, maxWidth: .infinity, alignment: .center)
+            .frame(width: shouldUseVerticalLayout ? 120 : 200)
             .padding(.horizontal, shouldUseVerticalLayout ? 16 : 20)
             .padding(.vertical, shouldUseVerticalLayout ? 14 : 16)
             .background(
@@ -685,6 +918,109 @@ struct BalanceReportView: View {
                     .frame(width: 1),
                 alignment: .trailing
             )
+            
+            // Phone column
+            VStack(spacing: 4) {
+                Text("Phone")
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .foregroundColor(.primary)
+                Text("Contact Number")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.secondary)
+            }
+            .frame(width: 160)
+            .padding(.vertical, 16)
+            .background(
+                LinearGradient(
+                    gradient: Gradient(colors: [Color.gray.opacity(0.08), Color.gray.opacity(0.04)]),
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .overlay(
+                Rectangle()
+                    .fill(Color.gray.opacity(0.2))
+                    .frame(width: 1),
+                alignment: .trailing
+            )
+            
+            // Email column
+            VStack(spacing: 4) {
+                Text("Email")
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .foregroundColor(.primary)
+                Text("Email Address")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.secondary)
+            }
+            .frame(width: 200)
+            .padding(.vertical, 16)
+            .background(
+                LinearGradient(
+                    gradient: Gradient(colors: [Color.gray.opacity(0.08), Color.gray.opacity(0.04)]),
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .overlay(
+                Rectangle()
+                    .fill(Color.gray.opacity(0.2))
+                    .frame(width: 1),
+                alignment: .trailing
+            )
+            
+            // Address column (hidden on iPad only)
+            #if os(iOS)
+            if horizontalSizeClass != .regular {
+                VStack(spacing: 4) {
+                    Text("Address")
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                        .foregroundColor(.primary)
+                    Text("Location")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.secondary)
+                }
+                .frame(width: 220)
+                .padding(.vertical, 16)
+                .background(
+                    LinearGradient(
+                        gradient: Gradient(colors: [Color.gray.opacity(0.08), Color.gray.opacity(0.04)]),
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .overlay(
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.2))
+                        .frame(width: 1),
+                    alignment: .trailing
+                )
+            }
+            #else
+            VStack(spacing: 4) {
+                Text("Address")
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .foregroundColor(.primary)
+                Text("Location")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.secondary)
+            }
+            .frame(width: 220)
+            .padding(.vertical, 16)
+            .background(
+                LinearGradient(
+                    gradient: Gradient(colors: [Color.gray.opacity(0.08), Color.gray.opacity(0.04)]),
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .overlay(
+                Rectangle()
+                    .fill(Color.gray.opacity(0.2))
+                    .frame(width: 1),
+                alignment: .trailing
+            )
+            #endif
             
             // Currency columns
             ForEach(displayCurrencies, id: \.self) { currency in
@@ -784,6 +1120,9 @@ struct BalanceReportView: View {
                 id: customer.id ?? UUID().uuidString,
                 name: customer.name,
                 type: customer.type,
+                phone: customer.phone,
+                email: customer.email,
+                address: customer.address,
                 cadBalance: customer.balance,
                 currencyBalances: [:],
                 totalBalance: customer.balance,
@@ -901,7 +1240,7 @@ struct BalanceReportView: View {
     }
     
     private func fetchMyCash() {
-        db.collection("Balances").document("Cash").getDocument { snapshot, error in
+        db.collection("Balances").document("cash").getDocument { snapshot, error in
             DispatchQueue.main.async {
                 if let error = error {
                     print("❌ Error fetching my cash: \(error.localizedDescription)")
@@ -924,6 +1263,109 @@ struct BalanceReportView: View {
                 }
             }
         }
+    }
+    
+    private func fetchInventoryValue() {
+        Task {
+            var totalValue: Double = 0.0
+            var referenceCache: [String: String] = [:]
+            
+            // First, fetch all reference collections for resolving document references
+            async let colorsTask = fetchReferenceCollectionForInventory("Colors")
+            async let carriersTask = fetchReferenceCollectionForInventory("Carriers")
+            async let locationsTask = fetchReferenceCollectionForInventory("StorageLocations")
+            
+            let (colors, carriers, locations) = await (colorsTask, carriersTask, locationsTask)
+            
+            // Merge all reference caches
+            referenceCache.merge(colors) { (_, new) in new }
+            referenceCache.merge(carriers) { (_, new) in new }
+            referenceCache.merge(locations) { (_, new) in new }
+            
+            do {
+                let brandsSnapshot = try await db.collection("PhoneBrands").getDocuments()
+                
+                await withTaskGroup(of: [Double].self) { group in
+                    for brandDoc in brandsSnapshot.documents {
+                        group.addTask {
+                            await self.fetchBrandInventoryValue(brandDoc: brandDoc, referenceCache: referenceCache)
+                        }
+                    }
+                    
+                    for await brandValues in group {
+                        for value in brandValues {
+                            totalValue += value
+                        }
+                    }
+                }
+                
+                await MainActor.run {
+                    self.totalInventoryValue = totalValue
+                    print("📦 Total Inventory Value: $\(Int(totalValue))")
+                }
+            } catch {
+                print("❌ Error fetching inventory value: \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    private func fetchReferenceCollectionForInventory(_ collection: String) async -> [String: String] {
+        var cache: [String: String] = [:]
+        do {
+            let snapshot = try await db.collection(collection).getDocuments()
+            for doc in snapshot.documents {
+                let fieldKey = (collection == "StorageLocations") ? "storageLocation" : "name"
+                if let name = doc.data()[fieldKey] as? String {
+                    cache[doc.documentID] = name
+                }
+            }
+        } catch {
+            print("Error fetching \(collection): \(error)")
+        }
+        return cache
+    }
+    
+    private func fetchBrandInventoryValue(brandDoc: QueryDocumentSnapshot, referenceCache: [String: String]) async -> [Double] {
+        var values: [Double] = []
+        
+        do {
+            let modelsSnapshot = try await brandDoc.reference.collection("Models").getDocuments()
+            
+            await withTaskGroup(of: [Double].self) { group in
+                for modelDoc in modelsSnapshot.documents {
+                    group.addTask {
+                        await self.fetchModelInventoryValue(modelDoc: modelDoc, referenceCache: referenceCache)
+                    }
+                }
+                
+                for await modelValues in group {
+                    values.append(contentsOf: modelValues)
+                }
+            }
+        } catch {
+            print("Error fetching models for brand: \(error)")
+        }
+        
+        return values
+    }
+    
+    private func fetchModelInventoryValue(modelDoc: QueryDocumentSnapshot, referenceCache: [String: String]) async -> [Double] {
+        var values: [Double] = []
+        
+        do {
+            let phonesSnapshot = try await modelDoc.reference.collection("Phones").getDocuments()
+            
+            for phoneDoc in phonesSnapshot.documents {
+                let data = phoneDoc.data()
+                if let unitCost = data["unitCost"] as? Double {
+                    values.append(unitCost)
+                }
+            }
+        } catch {
+            print("Error fetching phones for model: \(error)")
+        }
+        
+        return values
     }
     
     private func applyFilters() {
@@ -1005,6 +1447,9 @@ struct CustomerBalanceData: Identifiable {
     let id: String
     let name: String
     let type: CustomerType
+    let phone: String
+    let email: String
+    let address: String
     var cadBalance: Double
     var currencyBalances: [String: Double]
     var totalBalance: Double
@@ -1067,9 +1512,65 @@ struct CustomerBalanceRow: View {
                     .foregroundColor(.blue.opacity(0.6))
             }
         }
-        .frame(minWidth: shouldUseVerticalLayout ? 120 : 200, maxWidth: .infinity, alignment: .leading)
+        .frame(width: shouldUseVerticalLayout ? 120 : 200, alignment: .leading)
         .padding(.horizontal, shouldUseVerticalLayout ? 16 : 20)
         .padding(.vertical, shouldUseVerticalLayout ? 14 : 16)
+        .background(isEven ? Color.systemBackgroundColor : Color.gray.opacity(0.02))
+        .overlay(
+            Rectangle()
+                .fill(Color.gray.opacity(0.15))
+                .frame(width: 1),
+            alignment: .trailing
+        )
+    }
+    
+    private var phoneColumn: some View {
+        VStack(alignment: .center, spacing: 4) {
+            Text(customer.phone.isEmpty ? "—" : customer.phone)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(customer.phone.isEmpty ? .secondary : .primary)
+                .lineLimit(1)
+        }
+        .frame(width: 160)
+        .padding(.vertical, 16)
+        .background(isEven ? Color.systemBackgroundColor : Color.gray.opacity(0.02))
+        .overlay(
+            Rectangle()
+                .fill(Color.gray.opacity(0.15))
+                .frame(width: 1),
+            alignment: .trailing
+        )
+    }
+    
+    private var emailColumn: some View {
+        VStack(alignment: .center, spacing: 4) {
+            Text(customer.email.isEmpty ? "—" : customer.email)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(customer.email.isEmpty ? .secondary : .primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .frame(width: 200)
+        .padding(.vertical, 16)
+        .background(isEven ? Color.systemBackgroundColor : Color.gray.opacity(0.02))
+        .overlay(
+            Rectangle()
+                .fill(Color.gray.opacity(0.15))
+                .frame(width: 1),
+            alignment: .trailing
+        )
+    }
+    
+    private var addressColumn: some View {
+        VStack(alignment: .center, spacing: 4) {
+            Text(customer.address.isEmpty ? "—" : customer.address)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(customer.address.isEmpty ? .secondary : .primary)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+        }
+        .frame(width: 220)
+        .padding(.vertical, 16)
         .background(isEven ? Color.systemBackgroundColor : Color.gray.opacity(0.02))
         .overlay(
             Rectangle()
@@ -1131,6 +1632,18 @@ struct CustomerBalanceRow: View {
         }) {
             HStack(spacing: 0) {
                 customerInfoColumn
+                
+                phoneColumn
+                emailColumn
+                // Address column hidden on iPad (iOS regular width)
+                #if os(iOS)
+                if horizontalSizeClass != .regular {
+                    addressColumn
+                }
+                #else
+                addressColumn
+                #endif
+                
                 ForEach(currencies, id: \.self) { currency in
                     balanceColumn(for: currency)
                 }

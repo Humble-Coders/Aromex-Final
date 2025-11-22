@@ -38,6 +38,13 @@ struct PurchaseView: View {
     @State private var showingDeleteSuccess = false
     @State private var deletedItemIndex: Int?
     
+    // Service state
+    @State private var serviceItems: [ServiceItem] = []
+    @State private var showingAddServiceDialog = false
+    @State private var serviceToEdit: ServiceItem?
+    @State private var serviceToDelete: ServiceItem?
+    @State private var showingDeleteServiceConfirmation = false
+    
     // Payment details state
     @State private var gstPercentage: String = ""
     @State private var pstPercentage: String = ""
@@ -51,17 +58,17 @@ struct PurchaseView: View {
     @State private var showOverpaymentAlert: Bool = false
     @State private var overpaymentAlertMessage: String = ""
     
-	// Middleman payment state
-	@State private var useMiddlemanPayment: Bool = false
-	@State private var middlemanSearchText: String = ""
-	@State private var middlemanInternalSearchText: String = ""
-	@State private var showingMiddlemanDropdown: Bool = false
-	@State private var selectedMiddleman: EntityWithType? = nil
-	@State private var middlemanAmount: String = ""
-	@State private var middlemanUnit: String = "give" // Default to give, options: give, receive
-	@State private var middlemanCashAmount: String = ""
-	@State private var middlemanBankAmount: String = ""
-	@State private var middlemanCreditCardAmount: String = ""
+    // Middleman payment state
+    @State private var useMiddlemanPayment: Bool = false
+    @State private var middlemanSearchText: String = ""
+    @State private var middlemanInternalSearchText: String = ""
+    @State private var showingMiddlemanDropdown: Bool = false
+    @State private var selectedMiddleman: EntityWithType? = nil
+    @State private var middlemanAmount: String = ""
+    @State private var middlemanUnit: String = "give" // Default to give, options: give, receive
+    @State private var middlemanCashAmount: String = ""
+    @State private var middlemanBankAmount: String = ""
+    @State private var middlemanCreditCardAmount: String = ""
     
     // Payment options state
     @State private var cashAmount: String = ""
@@ -74,9 +81,9 @@ struct PurchaseView: View {
     @State private var showPaymentSuccess = false
     
     // Scroll proxy for iOS
-    #if os(iOS)
+#if os(iOS)
     @State private var scrollToField: ((String) -> Void)?
-    #endif
+#endif
     
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     @Environment(\.verticalSizeClass) var verticalSizeClass
@@ -86,32 +93,40 @@ struct PurchaseView: View {
     }
     
     var isIPad: Bool {
-        #if os(iOS)
+#if os(iOS)
         return horizontalSizeClass == .regular && verticalSizeClass == .regular
-        #else
+#else
         return false
-        #endif
+#endif
     }
     
     var isIPadVertical: Bool {
-        #if os(iOS)
+#if os(iOS)
         return horizontalSizeClass == .regular && verticalSizeClass == .compact
-        #else
+#else
         return false
-        #endif
+#endif
     }
     
     var isMacOS: Bool {
-        #if os(macOS)
+#if os(macOS)
         return true
-        #else
+#else
         return false
-        #endif
+#endif
     }
     
     // MARK: - Payment Calculations
-    var subtotal: Double {
+    var productSubtotal: Double {
         cartItems.reduce(0) { $0 + $1.unitCost }
+    }
+    
+    var serviceSubtotal: Double {
+        serviceItems.reduce(0) { $0 + $1.price }
+    }
+    
+    var subtotal: Double {
+        productSubtotal + serviceSubtotal
     }
     
     var gstAmount: Double {
@@ -127,7 +142,7 @@ struct PurchaseView: View {
     var adjustmentAmountValue: Double {
         return Double(adjustmentAmount) ?? 0.0
     }
-
+    
     var middlemanPaymentAmountValue: Double {
         guard useMiddlemanPayment, selectedMiddleman != nil, !middlemanAmount.isEmpty else {
             return 0.0
@@ -213,7 +228,7 @@ struct PurchaseView: View {
     }
     
     var body: some View {
-        #if os(iOS)
+#if os(iOS)
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 0) {
@@ -237,7 +252,7 @@ struct PurchaseView: View {
             .onAppear {
                 scrollToField = { fieldId in
                     withAnimation(.easeInOut(duration: 0.5)) {
-                        proxy.scrollTo(fieldId, anchor: .center)
+                        proxy.scrollTo(fieldId, anchor: .top)
                     }
                 }
                 retryFetchEntities = { fetchAllEntities() }
@@ -249,6 +264,21 @@ struct PurchaseView: View {
             }
             .onChange(of: showingSupplierDropdown) { isOpen in
                 isSupplierFieldFocused = isOpen
+                if isOpen {
+                    // Clear search text to show unfiltered list
+                    if selectedSupplier != nil {
+                        supplierSearchText = ""
+                    }
+                    // Scroll to field
+#if os(iOS)
+                    if isCompact {
+                        // Use the scrollToField closure that's already set up
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            scrollToField?("supplierDropdownField")
+                        }
+                    }
+#endif
+                }
             }
             .fullScreenCover(isPresented: $showingAddProductDialog) {
                 AddProductDialog(isPresented: $showingAddProductDialog, onDismiss: nil, onSave: { items in
@@ -261,6 +291,30 @@ struct PurchaseView: View {
                 }, onSave: { items in
                     updateCartItem(with: items.first!)
                 }, itemToEdit: item)
+            }
+            .fullScreenCover(isPresented: $showingAddServiceDialog) {
+                AddServiceDialog(isPresented: $showingAddServiceDialog, onDismiss: nil, onSave: { service in
+                    serviceItems.append(service)
+                })
+            }
+            .fullScreenCover(item: $serviceToEdit) { service in
+                AddServiceDialog(isPresented: .constant(true), onDismiss: {
+                    serviceToEdit = nil
+                }, onSave: { updatedService in
+                    updateServiceItem(with: updatedService)
+                }, serviceToEdit: service)
+            }
+            .confirmationDialog("Delete Service?", isPresented: $showingDeleteServiceConfirmation) {
+                Button("Delete", role: .destructive) {
+                    deleteService()
+                }
+                Button("Cancel", role: .cancel) {
+                    serviceToDelete = nil
+                }
+            } message: {
+                if let service = serviceToDelete {
+                    Text("Are you sure you want to delete '\(service.name)' from the cart?")
+                }
             }
             .modifier(DeleteConfirmationModifier(
                 isPresented: $showingDeleteConfirmation,
@@ -281,65 +335,89 @@ struct PurchaseView: View {
             }
         }
 #else
-ScrollView {
-    VStack(spacing: 0) {
-        
-        
-        // Form Section
-        if isCompact {
-            iPhoneLayout
-        } else if isIPadVertical {
-            iPhoneLayout
-        } else {
-            iPadMacLayout
+        ScrollView {
+            VStack(spacing: 0) {
+                
+                
+                // Form Section
+                if isCompact {
+                    iPhoneLayout
+                } else if isIPadVertical {
+                    iPhoneLayout
+                } else {
+                    iPadMacLayout
+                }
+                
+                Spacer(minLength: 100)
+            }
+            .padding(.horizontal, 20)
         }
-        
-        Spacer(minLength: 100)
-    }
-    .padding(.horizontal, 20)
-}
-.scrollIndicators(.hidden)
-.background(.regularMaterial)
-.onAppear {
-    retryFetchEntities = { fetchAllEntities() }
-    setupOrderNumberListener()
-    fetchAllEntities()
-}
-.onDisappear {
-    stopOrderNumberListener()
-}
-.onChange(of: showingSupplierDropdown) { isOpen in
-    isSupplierFieldFocused = isOpen
-}
-.sheet(isPresented: $showingAddProductDialog) {
-    AddProductDialog(isPresented: $showingAddProductDialog, onDismiss: nil, onSave: { items in
-        cartItems.append(contentsOf: expandedItems(from: items))
-    })
-}
-.sheet(item: $itemToEdit) { item in
-    EditProductDialog(isPresented: .constant(true), onDismiss: {
-        itemToEdit = nil
-    }, onSave: { items in
-        updateCartItem(with: items.first!)
-    }, itemToEdit: item)
-}
-.modifier(DeleteConfirmationModifier(
-    isPresented: $showingDeleteConfirmation,
-    showingSuccess: $showingDeleteSuccess,
-    itemToDelete: itemToDelete,
-    onDelete: deleteItem,
-    onCancel: { itemToDelete = nil }
-))
-.alert("Validation Required", isPresented: $showValidationAlert) {
-    Button("OK", role: .cancel) { }
-} message: {
-    Text(validationAlertMessage)
-}
-.alert("Overpayment Detected", isPresented: $showOverpaymentAlert) {
-    Button("OK", role: .cancel) { }
-} message: {
-    Text(overpaymentAlertMessage)
-}
+        .scrollIndicators(.hidden)
+        .background(.regularMaterial)
+        .onAppear {
+            retryFetchEntities = { fetchAllEntities() }
+            setupOrderNumberListener()
+            fetchAllEntities()
+        }
+        .onDisappear {
+            stopOrderNumberListener()
+        }
+        .onChange(of: showingSupplierDropdown) { isOpen in
+            isSupplierFieldFocused = isOpen
+        }
+        .sheet(isPresented: $showingAddProductDialog) {
+            AddProductDialog(isPresented: $showingAddProductDialog, onDismiss: nil, onSave: { items in
+                cartItems.append(contentsOf: expandedItems(from: items))
+            })
+        }
+        .sheet(item: $itemToEdit) { item in
+            EditProductDialog(isPresented: .constant(true), onDismiss: {
+                itemToEdit = nil
+            }, onSave: { items in
+                updateCartItem(with: items.first!)
+            }, itemToEdit: item)
+        }
+        .sheet(isPresented: $showingAddServiceDialog) {
+            AddServiceDialog(isPresented: $showingAddServiceDialog, onDismiss: nil, onSave: { service in
+                serviceItems.append(service)
+            })
+        }
+        .sheet(item: $serviceToEdit) { service in
+            AddServiceDialog(isPresented: .constant(true), onDismiss: {
+                serviceToEdit = nil
+            }, onSave: { updatedService in
+                updateServiceItem(with: updatedService)
+            }, serviceToEdit: service)
+        }
+        .confirmationDialog("Delete Service?", isPresented: $showingDeleteServiceConfirmation) {
+            Button("Delete", role: .destructive) {
+                deleteService()
+            }
+            Button("Cancel", role: .cancel) {
+                serviceToDelete = nil
+            }
+        } message: {
+            if let service = serviceToDelete {
+                Text("Are you sure you want to delete '\(service.name)' from the cart?")
+            }
+        }
+        .modifier(DeleteConfirmationModifier(
+            isPresented: $showingDeleteConfirmation,
+            showingSuccess: $showingDeleteSuccess,
+            itemToDelete: itemToDelete,
+            onDelete: deleteItem,
+            onCancel: { itemToDelete = nil }
+        ))
+        .alert("Validation Required", isPresented: $showValidationAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(validationAlertMessage)
+        }
+        .alert("Overpayment Detected", isPresented: $showOverpaymentAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(overpaymentAlertMessage)
+        }
 #endif
     }
     
@@ -359,11 +437,14 @@ ScrollView {
                     .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
             )
             
-            // Action Button
-            addProductButton
+            // Action Buttons
+            HStack(spacing: 16) {
+                addProductButton
+                addServiceButton
+            }
             
             // Cart table (iPhone stacked)
-            if !cartItems.isEmpty {
+            if !cartItems.isEmpty || !serviceItems.isEmpty {
                 cartTableCompact
                 paymentDetailsSection
                 compactPaymentOptionsSection
@@ -389,11 +470,14 @@ ScrollView {
                 )
             }
             
-            // Action Button
-            addProductButton
+            // Action Buttons
+            HStack(spacing: 16) {
+                addProductButton
+                addServiceButton
+            }
             
             // Cart table (iPad/macOS grid)
-            if !cartItems.isEmpty {
+            if !cartItems.isEmpty || !serviceItems.isEmpty {
                 if isIPadVertical {
                     cartTableCompact
                     paymentDetailsSection
@@ -426,12 +510,13 @@ ScrollView {
     // MARK: - Cart Tables
     private var cartTableCompact: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Text("Added Phones")
-                .font(.system(size: 20, weight: .bold))
-                .foregroundColor(.primary)
-                .padding(.horizontal, 16)
-            
-            ForEach(Array(cartItems.enumerated()), id: \.element.id) { index, item in
+            if !cartItems.isEmpty {
+                Text("Added Phones")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundColor(.primary)
+                    .padding(.horizontal, 16)
+                
+                ForEach(Array(cartItems.enumerated()), id: \.element.id) { index, item in
                 VStack(alignment: .leading, spacing: 16) {
                     // Header row with title and price
                     HStack(alignment: .top, spacing: 12) {
@@ -543,6 +628,93 @@ ScrollView {
                         .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
                         .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 2)
                 )
+                }
+            }
+            
+            if !serviceItems.isEmpty {
+                Text("Added Services")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundColor(.primary)
+                    .padding(.horizontal, 16)
+                    .padding(.top, cartItems.isEmpty ? 0 : 20)
+                
+                ForEach(Array(serviceItems.enumerated()), id: \.element.id) { index, service in
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack(alignment: .top, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 6) {
+                                    Text(service.name)
+                                        .font(.system(size: 17, weight: .semibold))
+                                        .foregroundColor(.primary)
+                                    Text("(Service)")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundColor(.secondary)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 4)
+                                                .fill(Color(red: 0.80, green: 0.40, blue: 0.20).opacity(0.15))
+                                        )
+                                }
+                                Text("Service Item")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(.secondary)
+                            }
+                            
+                            Spacer()
+                            
+                            VStack(alignment: .trailing, spacing: 4) {
+                                Text(String(format: "$ %.2f", service.price))
+                                    .font(.system(size: 16, weight: .bold))
+                                    .foregroundColor(.primary)
+                            }
+                        }
+                        
+                        Divider()
+                            .padding(.vertical, 4)
+                        
+                        HStack(spacing: 8) {
+                            Spacer()
+                            Button(action: {
+                                serviceToEdit = service
+                            }) {
+                                Image(systemName: "pencil")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundColor(.blue)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .fill(Color.blue.opacity(0.12))
+                                    )
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            
+                            Button(action: {
+                                serviceToDelete = service
+                                showingDeleteServiceConfirmation = true
+                            }) {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundColor(.red)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .fill(Color.red.opacity(0.12))
+                                    )
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                        }
+                    }
+                    .padding(20)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16)
+                            .fill(.regularMaterial)
+                            .stroke(Color(red: 0.80, green: 0.40, blue: 0.20).opacity(0.3), lineWidth: 1)
+                            .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 2)
+                    )
+                }
             }
         }
     }
@@ -567,7 +739,8 @@ ScrollView {
                         status: item.status,
                         storageLocation: item.storageLocation,
                         imeis: [imei],
-                        unitCost: item.unitCost
+                        unitCost: item.unitCost,
+                        actualCost: item.actualCost
                     )
                     result.append(single)
                 }
@@ -640,12 +813,14 @@ ScrollView {
         ]
         
         return VStack(spacing: 0) {
+            // Products
             ForEach(cartItems.indices, id: \.self) { index in
                 let item = cartItems[index]
-                let isLastItem = index == cartItems.count - 1
+                let rowNumber = index + 1
+                let isLastProduct = index == cartItems.count - 1 && serviceItems.isEmpty
                 
                 LazyVGrid(columns: columns, spacing: 8) {
-                    Text("\(index + 1)").font(.system(size: 14))
+                    Text("\(rowNumber)").font(.system(size: 14))
                     VStack(alignment: .leading, spacing: 2) {
                         Text(item.brand).font(.system(size: 14, weight: .semibold))
                         Text(item.model).font(.system(size: 13)).foregroundColor(.secondary)
@@ -679,7 +854,65 @@ ScrollView {
                 .background(Color.primary.opacity(0.02))
                 .drawingGroup()
                 
-                if !isLastItem {
+                if !isLastProduct {
+                    Divider()
+                        .padding(.leading, 16)
+                }
+            }
+            
+            // Services
+            ForEach(serviceItems.indices, id: \.self) { index in
+                let service = serviceItems[index]
+                let rowNumber = cartItems.count + index + 1
+                let isLastService = index == serviceItems.count - 1
+                
+                LazyVGrid(columns: columns, spacing: 8) {
+                    Text("\(rowNumber)").font(.system(size: 14))
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(service.name).font(.system(size: 14, weight: .semibold))
+                            Text("(Service)")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(.secondary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(Color(red: 0.80, green: 0.40, blue: 0.20).opacity(0.15))
+                                )
+                        }
+                        Text("Service Item").font(.system(size: 12)).foregroundColor(.secondary)
+                    }
+                    Text("-").font(.system(size: 14)).foregroundColor(.secondary)
+                    Text("-").font(.system(size: 14)).foregroundColor(.secondary)
+                    Text("-").font(.system(size: 14)).foregroundColor(.secondary)
+                    Text("Service").font(.system(size: 14)).foregroundColor(Color(red: 0.80, green: 0.40, blue: 0.20))
+                    Text("-").font(.system(size: 14)).foregroundColor(.secondary)
+                    Text("-").font(.system(size: 14)).foregroundColor(.secondary)
+                    Text(String(format: "$ %.2f", service.price)).font(.system(size: 14, weight: .semibold))
+                    HStack(spacing: 8) {
+                        Button(action: {
+                            serviceToEdit = service
+                        }) {
+                            actionIconButton(systemName: "pencil", tint: Color.blue)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        
+                        Button(action: {
+                            serviceToDelete = service
+                            showingDeleteServiceConfirmation = true
+                        }) {
+                            actionIconButton(systemName: "trash", tint: Color.red)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(Color(red: 0.80, green: 0.40, blue: 0.20).opacity(0.03))
+                .drawingGroup()
+                
+                if !isLastService {
                     Divider()
                         .padding(.leading, 16)
                 }
@@ -766,12 +999,14 @@ ScrollView {
         ]
         
         return VStack(spacing: 0) {
+            // Products
             ForEach(cartItems.indices, id: \.self) { index in
                 let item = cartItems[index]
-                let isLastItem = index == cartItems.count - 1
+                let rowNumber = index + 1
+                let isLastProduct = index == cartItems.count - 1 && serviceItems.isEmpty
                 
                 LazyVGrid(columns: columns, spacing: 20) {
-                    Text("\(index + 1)").font(.system(size: 14))
+                    Text("\(rowNumber)").font(.system(size: 14))
                     VStack(alignment: .leading, spacing: 2) {
                         Text(item.brand).font(.system(size: 14, weight: .semibold))
                         Text(item.model).font(.system(size: 13)).foregroundColor(.secondary)
@@ -805,7 +1040,65 @@ ScrollView {
                 .background(Color.primary.opacity(0.02))
                 .drawingGroup()
                 
-                if !isLastItem {
+                if !isLastProduct {
+                    Divider()
+                        .padding(.leading, 20)
+                }
+            }
+            
+            // Services
+            ForEach(serviceItems.indices, id: \.self) { index in
+                let service = serviceItems[index]
+                let rowNumber = cartItems.count + index + 1
+                let isLastService = index == serviceItems.count - 1
+                
+                LazyVGrid(columns: columns, spacing: 20) {
+                    Text("\(rowNumber)").font(.system(size: 14))
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(service.name).font(.system(size: 14, weight: .semibold))
+                            Text("(Service)")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(.secondary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(Color(red: 0.80, green: 0.40, blue: 0.20).opacity(0.15))
+                                )
+                        }
+                        Text("Service Item").font(.system(size: 12)).foregroundColor(.secondary)
+                    }
+                    Text("-").font(.system(size: 14)).foregroundColor(.secondary)
+                    Text("-").font(.system(size: 14)).foregroundColor(.secondary)
+                    Text("-").font(.system(size: 14)).foregroundColor(.secondary)
+                    Text("Service").font(.system(size: 14)).foregroundColor(Color(red: 0.80, green: 0.40, blue: 0.20))
+                    Text("-").font(.system(size: 14)).foregroundColor(.secondary)
+                    Text("-").font(.system(size: 14)).foregroundColor(.secondary)
+                    Text(String(format: "$ %.2f", service.price)).font(.system(size: 14, weight: .semibold))
+                    HStack(spacing: 8) {
+                        Button(action: {
+                            serviceToEdit = service
+                        }) {
+                            actionIconButton(systemName: "pencil", tint: Color.blue)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        
+                        Button(action: {
+                            serviceToDelete = service
+                            showingDeleteServiceConfirmation = true
+                        }) {
+                            actionIconButton(systemName: "trash", tint: Color.red)
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
+                .background(Color(red: 0.80, green: 0.40, blue: 0.20).opacity(0.03))
+                .drawingGroup()
+                
+                if !isLastService {
                     Divider()
                         .padding(.leading, 20)
                 }
@@ -830,7 +1123,7 @@ ScrollView {
     // MARK: - Payment Details Section
     private var paymentDetailsSection: some View {
         // Early return if no items - prevents any computation
-        if cartItems.isEmpty {
+        if cartItems.isEmpty && serviceItems.isEmpty {
             return AnyView(EmptyView())
         }
         
@@ -880,17 +1173,17 @@ ScrollView {
                 }
                 .background(Color.primary.opacity(0.02))
             }
-            .background(
-                Rectangle()
-                    .fill(.regularMaterial)
-                    .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
-            )
-            .clipShape(
-                RoundedRectangle(cornerRadius: 12)
-            )
-            .shadow(color: Color.black.opacity(0.05), radius: 8, x: 0, y: 4)
-            .padding(.horizontal, isIPadVertical ? 20 : 0)
-            .padding(.top, 20)
+                .background(
+                    Rectangle()
+                        .fill(.regularMaterial)
+                        .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                )
+                .clipShape(
+                    RoundedRectangle(cornerRadius: 12)
+                )
+                .shadow(color: Color.black.opacity(0.05), radius: 8, x: 0, y: 4)
+                .padding(.horizontal, isIPadVertical ? 20 : 0)
+                .padding(.top, 20)
         )
     }
     
@@ -1078,9 +1371,9 @@ ScrollView {
                         .font(.system(size: 16, weight: .semibold))
                         .multilineTextAlignment(.trailing)
                         .frame(width: 70)
-                        #if os(iOS)
+#if os(iOS)
                         .keyboardType(.decimalPad)
-                        #endif
+#endif
                         .onChange(of: amount.wrappedValue) { newValue in
                             let filtered = newValue.filter { "0123456789.".contains($0) }
                             if filtered != newValue {
@@ -1181,9 +1474,9 @@ ScrollView {
                     .textFieldStyle(PlainTextFieldStyle())
                     .font(.system(size: 16, weight: .medium))
                     .multilineTextAlignment(.trailing)
-                    #if os(iOS)
+#if os(iOS)
                     .keyboardType(.decimalPad)
-                    #endif
+#endif
                     .onChange(of: amount.wrappedValue) { newValue in
                         let filtered = newValue.filter { "0123456789.".contains($0) }
                         if filtered != newValue {
@@ -1315,9 +1608,9 @@ ScrollView {
                         .font(.system(size: 16, weight: .semibold))
                         .multilineTextAlignment(.trailing)
                         .frame(width: 65)
-                        #if os(iOS)
+#if os(iOS)
                         .keyboardType(.decimalPad)
-                        #endif
+#endif
                         .onChange(of: amount.wrappedValue) { newValue in
                             let filtered = newValue.filter { "0123456789.".contains($0) }
                             if filtered != newValue {
@@ -1500,7 +1793,7 @@ ScrollView {
             .padding(.bottom, 2)
             .padding(.top, 8)
         }
-        #if os(iOS)
+#if os(iOS)
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
@@ -1509,7 +1802,7 @@ ScrollView {
                 }
             }
         }
-        #endif
+#endif
     }
     
     private var adjustmentSection: some View {
@@ -1528,12 +1821,12 @@ ScrollView {
             notesInputField
                 .padding(.horizontal, 20)
                 .padding(.bottom, 12)
-
+            
             // Middleman payment toggle and inline fields
             middlemanPaymentSection
         }
     }
-
+    
     private var middlemanPaymentSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
@@ -1567,19 +1860,19 @@ ScrollView {
             }
             .padding(.horizontal, 20)
             .padding(.top, 12)
-
+            
             if useMiddlemanPayment && !allEntities.isEmpty {
                 VStack(spacing: 12) {
                     // Middleman dropdown (inline on all platforms)
                     middlemanDropdownButton
                         .padding(.horizontal, 20)
-
+                    
                     if showingMiddlemanDropdown {
                         middlemanDropdownInline
                             .padding(.horizontal, 20)
                             .transition(.opacity)
                     }
-
+                    
                     // Amount field
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Amount")
@@ -1671,7 +1964,7 @@ ScrollView {
                 .fill(Color.blue.opacity(0.08))
         )
     }
-
+    
     private var middlemanPaymentSplitRow: some View {
         HStack(spacing: 6) {
             // Cash
@@ -1724,9 +2017,9 @@ ScrollView {
                 .textFieldStyle(PlainTextFieldStyle())
                 .font(.system(size: 14, weight: .semibold))
                 .multilineTextAlignment(.center)
-                #if os(iOS)
+#if os(iOS)
                 .keyboardType(.decimalPad)
-                #endif
+#endif
                 .onChange(of: amount.wrappedValue) { newValue in
                     let filtered = newValue.filter { "0123456789.".contains($0) }
                     if filtered != newValue {
@@ -1747,7 +2040,7 @@ ScrollView {
                 .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
         )
     }
-
+    
     private var middlemanDropdownButton: some View {
         ZStack {
             TextField("Select middleman/customer/supplier", text: $middlemanSearchText)
@@ -1772,7 +2065,7 @@ ScrollView {
                         middlemanInternalSearchText = ""
                     }
                 }
-
+            
             HStack {
                 Spacer()
                 Button(action: {
@@ -1789,7 +2082,7 @@ ScrollView {
             }
         }
     }
-
+    
     private var middlemanDropdownInline: some View {
         let source = allEntities
         let query = middlemanInternalSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1802,7 +2095,7 @@ ScrollView {
                 entity.entityType.rawValue.localizedCaseInsensitiveContains(query)
             }
         }
-
+        
         return VStack(spacing: 0) {
             // List of entities, middlemen prioritized already in allEntities sorting
             ScrollView {
@@ -1905,6 +2198,133 @@ ScrollView {
                 .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.08), radius: 12, x: 0, y: 6)
+    }
+    
+    private var supplierDropdownInline: some View {
+        let source = allEntities
+        // Use empty query if dropdown just opened with a selection to show unfiltered
+        let effectiveSearchText = supplierSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = effectiveSearchText
+        let filtered: [EntityWithType]
+        if query.isEmpty {
+            filtered = source
+        } else {
+            filtered = source.filter { entity in
+                entity.name.localizedCaseInsensitiveContains(query) ||
+                entity.entityType.rawValue.localizedCaseInsensitiveContains(query)
+            }
+        }
+        
+        return VStack(spacing: 0) {
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    if filtered.isEmpty {
+                        if entityFetchError && allEntities.isEmpty {
+                            VStack(spacing: 12) {
+                                Text("Failed to load entities")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(.secondary)
+                                
+                                Button(action: {
+                                    fetchAllEntities()
+                                }) {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "arrow.clockwise")
+                                        Text("Retry")
+                                    }
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 8)
+                                    .background(Color.blue)
+                                    .cornerRadius(8)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 30)
+                        } else {
+                            Text("No entities found")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 30)
+                        }
+                    } else {
+                        ForEach(filtered) { entity in
+                            Button(action: {
+                                withAnimation {
+                                    selectedSupplier = entity
+                                    supplierSearchText = entity.name
+                                    showingSupplierDropdown = false
+                                }
+                            }) {
+                                HStack(spacing: 12) {
+                                    Image(systemName: entity.entityType.icon)
+                                        .foregroundColor(entity.entityType.color)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(entity.name)
+                                            .font(.system(size: 15, weight: .medium))
+                                            .foregroundColor(.primary)
+                                            .lineLimit(1)
+                                        let balanceText = entity.balance.map { String(format: "Balance: $%.2f", $0) } ?? "Balance: —"
+                                        Text(balanceText)
+                                            .font(.system(size: 12, weight: .regular))
+                                            .foregroundColor(.primary.opacity(0.7))
+                                            .lineLimit(1)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    Spacer()
+                                    if selectedSupplier?.id == entity.id {
+                                        Image(systemName: "checkmark")
+                                            .foregroundColor(.green)
+                                    }
+                                }
+                                .padding(.horizontal, 12)
+                                .frame(height: 56)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            Divider()
+                                .background(Color.secondary.opacity(0.15))
+                                .padding(.leading, 44)
+                        }
+                    }
+                }
+                .padding(.vertical, 6)
+            }
+            .scrollIndicators(.hidden)
+        }
+        .scrollIndicators(.hidden)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: {
+            let itemHeight: CGFloat = 56
+            let maxVisible = 4
+            let count = filtered.count
+            if count == 0 {
+                return 120
+            } else if count <= maxVisible {
+                return CGFloat(count) * itemHeight
+            }
+            return CGFloat(maxVisible) * itemHeight
+        }())
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.secondary.opacity(0.08))
+                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.08), radius: 12, x: 0, y: 6)
+        .onAppear {
+            // Scroll to field when dropdown appears
+            #if os(iOS)
+            if isCompact {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    scrollToField?("supplierDropdownField")
+                }
+            }
+            #endif
+        }
     }
     
     private var adjustmentInputField: some View {
@@ -2338,11 +2758,20 @@ ScrollView {
             )
             .frame(height: 44)
             
+            // Inline dropdown for iOS (iPhone only)
+            #if os(iOS)
+            if showingSupplierDropdown && isCompact {
+                supplierDropdownInline
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            }
+            #endif
+            
             Text("Select a supplier for this purchase")
                 .font(.system(size: 12))
                 .foregroundColor(.secondary)
         }
         .frame(maxWidth: .infinity)
+        .id("supplierDropdownField")
     }
     
     var addProductButton: some View {
@@ -2357,6 +2786,7 @@ ScrollView {
                     .font(.system(size: 16, weight: .semibold))
             }
             .foregroundColor(.white)
+            .frame(maxWidth: .infinity)
             .padding(.horizontal, 32)
             .padding(.vertical, 16)
             .background(
@@ -2373,6 +2803,38 @@ ScrollView {
                     )
             )
             .shadow(color: Color(red: 0.25, green: 0.33, blue: 0.54).opacity(0.3), radius: 8, x: 0, y: 4)
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+    
+    var addServiceButton: some View {
+        Button(action: {
+            showingAddServiceDialog = true
+        }) {
+            HStack(spacing: 12) {
+                Image(systemName: "wrench.and.screwdriver")
+                    .font(.system(size: 18, weight: .medium))
+                Text("Add Service")
+                    .font(.system(size: 16, weight: .semibold))
+            }
+            .foregroundColor(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 16)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(
+                        LinearGradient(
+                            gradient: Gradient(colors: [
+                                Color(red: 0.80, green: 0.40, blue: 0.20),
+                                Color(red: 0.70, green: 0.35, blue: 0.15)
+                            ]),
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+            )
+            .shadow(color: Color(red: 0.80, green: 0.40, blue: 0.20).opacity(0.3), radius: 8, x: 0, y: 4)
         }
         .buttonStyle(PlainButtonStyle())
     }
@@ -2564,6 +3026,18 @@ ScrollView {
         cartItems.append(contentsOf: expandedItems(from: [updatedItem]))
         
         itemToEdit = nil
+    }
+    
+    private func updateServiceItem(with updatedService: ServiceItem) {
+        serviceItems.removeAll { $0.id == updatedService.id }
+        serviceItems.append(updatedService)
+        serviceToEdit = nil
+    }
+    
+    private func deleteService() {
+        guard let service = serviceToDelete else { return }
+        serviceItems.removeAll { $0.id == service.id }
+        serviceToDelete = nil
     }
     
     #if os(iOS)
@@ -3394,7 +3868,7 @@ struct SupplierDropdownOverlay: View {
 // MARK: - Payment Confirmation Extension
 extension PurchaseView {
     private func confirmPayment() async {
-        guard !cartItems.isEmpty else { return }
+        guard !cartItems.isEmpty || !serviceItems.isEmpty else { return }
         
         // Validate required fields
         var missingFields: [String] = []
@@ -3431,168 +3905,242 @@ extension PurchaseView {
         
         print("🛒 Starting payment confirmation process...")
         print("📦 Cart items count: \(cartItems.count)")
+        print("🔧 Service items count: \(serviceItems.count)")
         
-        isConfirmingPayment = true
+        await MainActor.run {
+            isConfirmingPayment = true
+        }
         
         do {
             let db = Firestore.firestore()
             print("🔥 Connected to Firestore database")
             
-            // Use batch write for atomic operations
-            let batch = db.batch()
-            print("📝 Created Firestore batch for atomic operations")
+            // PHASE 1: Prepare and collect data before transaction
+            print("🔄 PHASE 1: Preparing data and collecting references...")
             
+            // Data structures to store references and data
+            var phonesToCreate: [(data: [String: Any], docRef: DocumentReference, imei: String)] = []
+            var brandsToCreate: [(data: [String: Any], docRef: DocumentReference)] = []
+            var modelsToCreate: [(data: [String: Any], docRef: DocumentReference)] = []
+            var carriersToCreate: [(data: [String: Any], docRef: DocumentReference, name: String)] = []
+            var colorsToCreate: [(data: [String: Any], docRef: DocumentReference, name: String)] = []
+            var locationsToCreate: [(data: [String: Any], docRef: DocumentReference, name: String)] = []
+            var brandRefs: [String: DocumentReference] = [:]
+            var modelRefs: [(brand: String, model: String, ref: DocumentReference)] = []
+            var carrierRefs: [String: DocumentReference] = [:]
+            var colorRefs: [String: DocumentReference] = [:]
+            var locationRefs: [String: DocumentReference] = [:]
+            
+            // 1. Process all brands
             for phoneItem in cartItems {
-                print("📱 Processing phone item: \(phoneItem.brand) \(phoneItem.model)")
-                
-                // Find or create brand document (auto-generated ID)
-                print("🔍 Searching for existing brand: \(phoneItem.brand)")
-                let brandQuery = db.collection("PhoneBrands").whereField("brand", isEqualTo: phoneItem.brand).limit(to: 1)
-                let brandSnapshot = try await brandQuery.getDocuments()
-                
-                let brandDocRef: DocumentReference
-                if let existingBrand = brandSnapshot.documents.first {
-                    brandDocRef = existingBrand.reference
-                    print("✅ Found existing brand document: \(existingBrand.documentID)")
-                } else {
-                    // Create new brand document with auto-generated ID
-                    brandDocRef = db.collection("PhoneBrands").document()
-                    print("🆕 Creating new brand document: \(brandDocRef.documentID)")
-                    batch.setData([
-                        "brand": phoneItem.brand,
-                        "createdAt": selectedDate
-                    ], forDocument: brandDocRef)
+                // Only process each brand once
+                if brandRefs[phoneItem.brand] == nil {
+                    print("🔍 Searching for existing brand: \(phoneItem.brand)")
+                    let brandQuery = db.collection("PhoneBrands").whereField("brand", isEqualTo: phoneItem.brand).limit(to: 1)
+                    let brandSnapshot = try await brandQuery.getDocuments()
+                    
+                    if let existingBrand = brandSnapshot.documents.first {
+                        brandRefs[phoneItem.brand] = existingBrand.reference
+                        print("✅ Found existing brand document: \(existingBrand.documentID)")
+                    } else {
+                        // Create new brand document with auto-generated ID
+                        let brandDocRef = db.collection("PhoneBrands").document()
+                        print("🆕 Creating new brand document: \(brandDocRef.documentID)")
+                        brandRefs[phoneItem.brand] = brandDocRef
+                        brandsToCreate.append((
+                            data: [
+                                "brand": phoneItem.brand,
+                                "createdAt": selectedDate
+                            ],
+                            docRef: brandDocRef
+                        ))
+                    }
+                }
+            }
+            
+            // 2. Process all models
+            for phoneItem in cartItems {
+                // Check if we've already processed this model
+                if !modelRefs.contains(where: { $0.brand == phoneItem.brand && $0.model == phoneItem.model }) {
+                    guard let brandDocRef = brandRefs[phoneItem.brand] else {
+                        throw NSError(domain: "ConfirmPayment", code: 1, userInfo: [
+                            NSLocalizedDescriptionKey: "Brand reference missing for \(phoneItem.brand)"
+                        ])
+                    }
+                    
+                    print("🔍 Searching for existing model: \(phoneItem.model)")
+                    let modelQuery = brandDocRef.collection("Models").whereField("model", isEqualTo: phoneItem.model).limit(to: 1)
+                    let modelSnapshot = try await modelQuery.getDocuments()
+                    
+                    if let existingModel = modelSnapshot.documents.first {
+                        let modelDocRef = existingModel.reference
+                        modelRefs.append((brand: phoneItem.brand, model: phoneItem.model, ref: modelDocRef))
+                        print("✅ Found existing model document: \(existingModel.documentID)")
+                    } else {
+                        // Create new model document with auto-generated ID
+                        let modelDocRef = brandDocRef.collection("Models").document()
+                        print("🆕 Creating new model document: \(modelDocRef.documentID)")
+                        modelRefs.append((brand: phoneItem.brand, model: phoneItem.model, ref: modelDocRef))
+                        modelsToCreate.append((
+                            data: [
+                                "model": phoneItem.model,
+                                "brand": phoneItem.brand,
+                                "createdAt": selectedDate
+                            ],
+                            docRef: modelDocRef
+                        ))
+                    }
+                }
+            }
+            
+            // 3. Process all carriers, colors, and storage locations
+            for phoneItem in cartItems {
+                // Process carrier if it exists
+                if !phoneItem.carrier.isEmpty && carrierRefs[phoneItem.carrier] == nil {
+                    print("🔍 Searching for existing carrier: \(phoneItem.carrier)")
+                    let carrierQuery = db.collection("Carriers").whereField("name", isEqualTo: phoneItem.carrier).limit(to: 1)
+                    let carrierSnapshot = try await carrierQuery.getDocuments()
+                    
+                    if let carrierDoc = carrierSnapshot.documents.first {
+                        carrierRefs[phoneItem.carrier] = carrierDoc.reference
+                        print("✅ Found existing carrier document: \(carrierDoc.documentID)")
+                    } else {
+                        // Create new carrier document
+                        let newCarrierRef = db.collection("Carriers").document()
+                        print("🆕 Creating new carrier document: \(newCarrierRef.documentID)")
+                        carrierRefs[phoneItem.carrier] = newCarrierRef
+                        carriersToCreate.append((
+                            data: [
+                                "name": phoneItem.carrier,
+                                "createdAt": selectedDate
+                            ],
+                            docRef: newCarrierRef,
+                            name: phoneItem.carrier
+                        ))
+                    }
                 }
                 
-                // Find or create model document (auto-generated ID)
-                print("🔍 Searching for existing model: \(phoneItem.model)")
-                let modelQuery = brandDocRef.collection("Models").whereField("model", isEqualTo: phoneItem.model).limit(to: 1)
-                let modelSnapshot = try await modelQuery.getDocuments()
-                
-                let modelDocRef: DocumentReference
-                if let existingModel = modelSnapshot.documents.first {
-                    modelDocRef = existingModel.reference
-                    print("✅ Found existing model document: \(existingModel.documentID)")
-                } else {
-                    // Create new model document with auto-generated ID
-                    modelDocRef = brandDocRef.collection("Models").document()
-                    print("🆕 Creating new model document: \(modelDocRef.documentID)")
-                    batch.setData([
-                        "model": phoneItem.model,
-                        "brand": phoneItem.brand,
-                        "createdAt": selectedDate
-                    ], forDocument: modelDocRef)
+                // Process color if it exists
+                if !phoneItem.color.isEmpty && colorRefs[phoneItem.color] == nil {
+                    print("🔍 Searching for existing color: \(phoneItem.color)")
+                    let colorQuery = db.collection("Colors").whereField("name", isEqualTo: phoneItem.color).limit(to: 1)
+                    let colorSnapshot = try await colorQuery.getDocuments()
+                    
+                    if let colorDoc = colorSnapshot.documents.first {
+                        colorRefs[phoneItem.color] = colorDoc.reference
+                        print("✅ Found existing color document: \(colorDoc.documentID)")
+                    } else {
+                        // Create new color document
+                        let newColorRef = db.collection("Colors").document()
+                        print("🆕 Creating new color document: \(newColorRef.documentID)")
+                        colorRefs[phoneItem.color] = newColorRef
+                        colorsToCreate.append((
+                            data: [
+                                "name": phoneItem.color,
+                                "createdAt": selectedDate
+                            ],
+                            docRef: newColorRef,
+                            name: phoneItem.color
+                        ))
+                    }
                 }
                 
-                // Create separate phone documents for each IMEI
-                print("📱 Creating phone documents for \(phoneItem.imeis.count) IMEIs")
+                // Process storage location if it exists
+                if !phoneItem.storageLocation.isEmpty && locationRefs[phoneItem.storageLocation] == nil {
+                    print("🔍 Searching for existing storage location: \(phoneItem.storageLocation)")
+                    let locationQuery = db.collection("StorageLocations").whereField("storageLocation", isEqualTo: phoneItem.storageLocation).limit(to: 1)
+                    let locationSnapshot = try await locationQuery.getDocuments()
+                    
+                    if let locationDoc = locationSnapshot.documents.first {
+                        locationRefs[phoneItem.storageLocation] = locationDoc.reference
+                        print("✅ Found existing storage location document: \(locationDoc.documentID)")
+                    } else {
+                        // Create new storage location document
+                        let newLocationRef = db.collection("StorageLocations").document()
+                        print("🆕 Creating new storage location document: \(newLocationRef.documentID)")
+                        locationRefs[phoneItem.storageLocation] = newLocationRef
+                        locationsToCreate.append((
+                            data: [
+                                "storageLocation": phoneItem.storageLocation,
+                                "createdAt": selectedDate
+                            ],
+                            docRef: newLocationRef,
+                            name: phoneItem.storageLocation
+                        ))
+                    }
+                }
+            }
+            
+            // 4. Prepare phone documents and IMEI documents
+            for phoneItem in cartItems {
+                // Find the model reference for this phone
+                guard let modelRef = modelRefs.first(where: { $0.brand == phoneItem.brand && $0.model == phoneItem.model })?.ref else {
+                    throw NSError(domain: "ConfirmPayment", code: 2, userInfo: [
+                        NSLocalizedDescriptionKey: "Model reference missing for \(phoneItem.brand) \(phoneItem.model)"
+                    ])
+                }
+                
+                // Find the brand reference
+                guard let brandRef = brandRefs[phoneItem.brand] else {
+                    throw NSError(domain: "ConfirmPayment", code: 3, userInfo: [
+                        NSLocalizedDescriptionKey: "Brand reference missing for \(phoneItem.brand)"
+                    ])
+                }
+                
+                // Create phone documents for each IMEI
                 for imei in phoneItem.imeis {
                     // Create phone document reference with auto-generated ID
-                    let phoneDocRef = modelDocRef.collection("Phones").document()
-                    print("🆕 Creating phone document for IMEI: \(imei)")
+                    let phoneDocRef = modelRef.collection("Phones").document()
+                    print("🆕 Preparing phone document for IMEI: \(imei)")
                     
                     // Prepare phone data for individual phone
                     var phoneData: [String: Any] = [
-                        "brand": brandDocRef, // Brand as reference
-                        "model": modelDocRef, // Model as reference
+                        "brand": brandRef, // Brand as reference
+                        "model": modelRef, // Model as reference
                         "capacity": phoneItem.capacity,
                         "capacityUnit": phoneItem.capacityUnit,
                         "imei": imei, // Single IMEI per document
                         "unitCost": phoneItem.unitCost,
                         "status": phoneItem.status,
-                        "storageLocation": phoneItem.storageLocation,
                         "createdAt": selectedDate
                     ]
                     
                     // Add carrier as reference if it exists
-                    if !phoneItem.carrier.isEmpty {
-                        print("🔍 Searching for existing carrier: \(phoneItem.carrier)")
-                        // Check if carrier exists in Carriers collection
-                        let carrierQuery = db.collection("Carriers").whereField("name", isEqualTo: phoneItem.carrier).limit(to: 1)
-                        let carrierSnapshot = try await carrierQuery.getDocuments()
-                        
-                        if let carrierDoc = carrierSnapshot.documents.first {
-                            phoneData["carrier"] = carrierDoc.reference
-                            print("✅ Found existing carrier document: \(carrierDoc.documentID)")
-                        } else {
-                            // Create new carrier document if it doesn't exist
-                            let newCarrierRef = db.collection("Carriers").document()
-                            print("🆕 Creating new carrier document: \(newCarrierRef.documentID)")
-                            batch.setData([
-                                "name": phoneItem.carrier,
-                                "createdAt": selectedDate
-                            ], forDocument: newCarrierRef)
-                            phoneData["carrier"] = newCarrierRef
-                        }
+                    if !phoneItem.carrier.isEmpty, let carrierRef = carrierRefs[phoneItem.carrier] {
+                        phoneData["carrier"] = carrierRef
                     }
                     
                     // Add color as reference if it exists
-                    if !phoneItem.color.isEmpty {
-                        print("🔍 Searching for existing color: \(phoneItem.color)")
-                        let colorQuery = db.collection("Colors").whereField("name", isEqualTo: phoneItem.color).limit(to: 1)
-                        let colorSnapshot = try await colorQuery.getDocuments()
-                        
-                        if let colorDoc = colorSnapshot.documents.first {
-                            phoneData["color"] = colorDoc.reference
-                            print("✅ Found existing color document: \(colorDoc.documentID)")
-                        } else {
-                            // Create new color document if it doesn't exist
-                            let newColorRef = db.collection("Colors").document()
-                            print("🆕 Creating new color document: \(newColorRef.documentID)")
-                            batch.setData([
-                                "name": phoneItem.color,
-                                "createdAt": selectedDate
-                            ], forDocument: newColorRef)
-                            phoneData["color"] = newColorRef
-                        }
+                    if !phoneItem.color.isEmpty, let colorRef = colorRefs[phoneItem.color] {
+                        phoneData["color"] = colorRef
                     }
                     
                     // Add storage location as reference if it exists
-                    if !phoneItem.storageLocation.isEmpty {
-                        print("🔍 Searching for existing storage location: \(phoneItem.storageLocation)")
-                        let locationQuery = db.collection("StorageLocations").whereField("name", isEqualTo: phoneItem.storageLocation).limit(to: 1)
-                        let locationSnapshot = try await locationQuery.getDocuments()
-                        
-                        if let locationDoc = locationSnapshot.documents.first {
-                            phoneData["storageLocation"] = locationDoc.reference
-                            print("✅ Found existing storage location document: \(locationDoc.documentID)")
-                        } else {
-                            // Create new storage location document if it doesn't exist
-                            let newLocationRef = db.collection("StorageLocations").document()
-                            print("🆕 Creating new storage location document: \(newLocationRef.documentID)")
-                            batch.setData([
-                                "name": phoneItem.storageLocation,
-                                "createdAt": selectedDate
-                            ], forDocument: newLocationRef)
-                            phoneData["storageLocation"] = newLocationRef
-                        }
+                    if !phoneItem.storageLocation.isEmpty, let locationRef = locationRefs[phoneItem.storageLocation] {
+                        phoneData["storageLocation"] = locationRef
+                    } else {
+                        phoneData["storageLocation"] = phoneItem.storageLocation
                     }
                     
-                    // Set individual phone document
-                    print("💾 Adding phone document to batch: \(phoneDocRef.documentID)")
-                    batch.setData(phoneData, forDocument: phoneDocRef)
-                    
-                    // Also add IMEI to separate IMEI collection
-                    let imeiDocRef = db.collection("IMEI").document()
-                    print("🔢 Adding IMEI document to batch: \(imeiDocRef.documentID)")
-                    batch.setData([
-                        "imei": imei,
-                        "phoneReference": phoneDocRef,
-                        "createdAt": selectedDate
-                    ], forDocument: imeiDocRef)
+                    // Add to our list of phones to create
+                    phonesToCreate.append((data: phoneData, docRef: phoneDocRef, imei: imei))
                 }
             }
             
-            // Create Purchase document for transaction history and billing
-            let purchaseDocRef = db.collection("Purchases").document()
-            print("📄 Creating purchase document: \(purchaseDocRef.documentID)")
+            // 5. Prepare order number and other transaction details
+            print("🔢 Preparing order number and transaction details...")
+            let orderNumberDocRef = db.collection("OrderNumbers").document()
+            
+            // Extract the numeric part from the order number (remove "ORD-" prefix)
+            let orderNumberValue = orderNumber.replacingOccurrences(of: "ORD-", with: "")
+            let orderNumberInt = Int(orderNumberValue) ?? 1
             
             // Calculate payment totals
             let totalCashPaid = cashAmountValue
             let totalBankPaid = bankAmountValue
             let totalCreditCardPaid = creditCardAmountValue
             let totalPaid = totalCashPaid + totalBankPaid + totalCreditCardPaid
-            let remainingCredit = totalPaid - grandTotal
+            let remainingCredit = creditAmount
             
             print("💰 Payment Summary:")
             print("   Cash: $\(totalCashPaid)")
@@ -3607,31 +4155,102 @@ extension PurchaseView {
             var finalBank = bankAmountValue
             var finalCard = creditCardAmountValue
             
-            print("💵 Initial Final Amounts:")
-            print("   Final Cash: $\(finalCash)")
-            print("   Final Bank: $\(finalBank)")
-            print("   Final Card: $\(finalCard)")
+            // 6. Process supplier and middleman
+            // Get supplier reference
+            var supplierDocRef: DocumentReference?
+            var supplierCollectionName: String?
             
-            // Apply middleman payment adjustments if enabled
-            if useMiddlemanPayment && (middlemanCashAmountValue > 0 || middlemanBankAmountValue > 0 || middlemanCreditCardAmountValue > 0) {
-                print("🤝 Applying middleman payment adjustments:")
-                print("   Middleman Unit: \(middlemanUnit)")
-                print("   Middleman Cash: $\(middlemanCashAmountValue)")
-                print("   Middleman Bank: $\(middlemanBankAmountValue)")
-                print("   Middleman Card: $\(middlemanCreditCardAmountValue)")
+            if let supplier = selectedSupplier {
+                print("🏪 Processing supplier: \(supplier.name)")
                 
-                if middlemanUnit == "give" {
-                    // Add middleman payments to final amounts
-                    finalCash += middlemanCashAmountValue
-                    finalBank += middlemanBankAmountValue
-                    finalCard += middlemanCreditCardAmountValue
-                    print("   Mode: Give - Adding middleman amounts to final totals")
+                // Determine collection based on entity type
+                let collectionName: String
+                switch supplier.entityType {
+                case .customer:
+                    collectionName = "Customers"
+                case .supplier:
+                    collectionName = "Suppliers"
+                case .middleman:
+                    collectionName = "Middlemen"
+                }
+                
+                supplierCollectionName = collectionName
+                print("🔍 Searching for supplier in \(collectionName) collection")
+                
+                let supplierQuery = db.collection(collectionName).whereField("name", isEqualTo: supplier.name).limit(to: 1)
+                let supplierSnapshot = try await supplierQuery.getDocuments()
+                
+                if let supplierDoc = supplierSnapshot.documents.first {
+                    print("✅ Found supplier document: \(supplierDoc.documentID)")
+                    supplierDocRef = supplierDoc.reference
                 } else {
-                    // Subtract middleman payments from final amounts (receive mode)
-                    finalCash -= middlemanCashAmountValue
-                    finalBank -= middlemanBankAmountValue
-                    finalCard -= middlemanCreditCardAmountValue
-                    print("   Mode: Receive - Subtracting middleman amounts from final totals")
+                    print("❌ Supplier document not found in \(collectionName) collection for name: \(supplier.name)")
+                    throw NSError(domain: "ConfirmPayment", code: 4, userInfo: [
+                        NSLocalizedDescriptionKey: "Supplier not found in database: \(supplier.name)"
+                    ])
+                }
+            } else {
+                throw NSError(domain: "ConfirmPayment", code: 5, userInfo: [
+                    NSLocalizedDescriptionKey: "No supplier selected"
+                ])
+            }
+            
+            // Get middleman reference if used
+            var middlemanDocRef: DocumentReference?
+            var middlemanCollectionName: String?
+            
+            if useMiddlemanPayment, let middleman = selectedMiddleman {
+                print("🤝 Processing middleman: \(middleman.name)")
+                
+                // Determine collection based on entity type
+                let collectionName: String
+                switch middleman.entityType {
+                case .customer:
+                    collectionName = "Customers"
+                case .supplier:
+                    collectionName = "Suppliers"
+                case .middleman:
+                    collectionName = "Middlemen"
+                }
+                
+                middlemanCollectionName = collectionName
+                print("🔍 Searching for middleman in \(collectionName) collection")
+                
+                // Get middleman reference from appropriate collection
+                let middlemanQuery = db.collection(collectionName).whereField("name", isEqualTo: middleman.name).limit(to: 1)
+                let middlemanSnapshot = try await middlemanQuery.getDocuments()
+                
+                if let middlemanDoc = middlemanSnapshot.documents.first {
+                    print("✅ Found middleman document: \(middlemanDoc.documentID)")
+                    middlemanDocRef = middlemanDoc.reference
+                    
+                    // Apply middleman payment adjustments
+                    if middlemanCashAmountValue > 0 || middlemanBankAmountValue > 0 || middlemanCreditCardAmountValue > 0 {
+                        print("🤝 Applying middleman payment adjustments:")
+                        print("   Middleman Unit: \(middlemanUnit)")
+                        print("   Middleman Cash: $\(middlemanCashAmountValue)")
+                        print("   Middleman Bank: $\(middlemanBankAmountValue)")
+                        print("   Middleman Card: $\(middlemanCreditCardAmountValue)")
+                        
+                        if middlemanUnit == "give" {
+                            // Add middleman payments to final amounts
+                            finalCash += middlemanCashAmountValue
+                            finalBank += middlemanBankAmountValue
+                            finalCard += middlemanCreditCardAmountValue
+                            print("   Mode: Give - Adding middleman amounts to final totals")
+                        } else {
+                            // Subtract middleman payments from final amounts (receive mode)
+                            finalCash -= middlemanCashAmountValue
+                            finalBank -= middlemanBankAmountValue
+                            finalCard -= middlemanCreditCardAmountValue
+                            print("   Mode: Receive - Subtracting middleman amounts from final totals")
+                        }
+                    }
+                } else {
+                    print("❌ Middleman document not found in \(collectionName) collection for name: \(middleman.name)")
+                    throw NSError(domain: "ConfirmPayment", code: 6, userInfo: [
+                        NSLocalizedDescriptionKey: "Middleman not found in database: \(middleman.name)"
+                    ])
                 }
             }
             
@@ -3639,6 +4258,10 @@ extension PurchaseView {
             print("   Final Cash: $\(finalCash)")
             print("   Final Bank: $\(finalBank)")
             print("   Final Card: $\(finalCard)")
+            
+            // 7. Prepare purchase document data
+            let purchaseDocRef = db.collection("Purchases").document()
+            print("📄 Preparing purchase document: \(purchaseDocRef.documentID)")
             
             // Prepare phone details for purchase document
             var purchasedPhones: [[String: Any]] = []
@@ -3666,15 +4289,15 @@ extension PurchaseView {
                 }
             }
             
-            // Prepare order number variables first
-            let orderNumberDocRef = db.collection("OrderNumbers").document()
-            print("🔢 Creating order number document: \(orderNumberDocRef.documentID)")
+            // Prepare services data
+            var services: [[String: Any]] = []
+            for serviceItem in serviceItems {
+                services.append([
+                    "name": serviceItem.name,
+                    "price": serviceItem.price
+                ])
+            }
             
-            // Extract the numeric part from the order number (remove "ORD-" prefix)
-            let orderNumberValue = orderNumber.replacingOccurrences(of: "ORD-", with: "")
-            let orderNumberInt = Int(orderNumberValue) ?? 1
-            
-            // Prepare purchase document data
             var purchaseData: [String: Any] = [
                 "transactionDate": selectedDate,
                 "orderNumber": orderNumberInt,
@@ -3690,6 +4313,7 @@ extension PurchaseView {
                 "grandTotal": grandTotal,
                 "notes": notes,
                 "purchasedPhones": purchasedPhones,
+                "services": services,
                 "paymentMethods": [
                     "cash": totalCashPaid,
                     "bank": totalBankPaid,
@@ -3699,41 +4323,19 @@ extension PurchaseView {
                 ]
             ]
             
-            // Add middleman payment details if applicable
-            var middlemanDocRef: DocumentReference?
-            var middlemanCollectionName: String?
-            
-            if useMiddlemanPayment, let middleman = selectedMiddleman {
-                print("🤝 Adding middleman to purchase:")
-                print("   Name: \(middleman.name)")
-                print("   Type: \(middleman.entityType)")
-                print("   Amount: \(middlemanAmount)")
-                print("   Amount Value: \(middlemanPaymentAmountValue)")
-                print("   Unit: \(middlemanUnit)")
-                print("   Credit Amount: \(middlemanCreditAmount)")
-                
-                // Determine collection based on entity type
-                let collectionName: String
-                switch middleman.entityType {
-                case .customer:
-                    collectionName = "Customers"
-                case .supplier:
-                    collectionName = "Suppliers"
-                case .middleman:
-                    collectionName = "Middlemen"
+            // Add supplier details
+            if let supplierDocRef = supplierDocRef {
+                purchaseData["supplier"] = supplierDocRef
+                if let supplier = selectedSupplier {
+                    purchaseData["supplierName"] = supplier.name
+                    purchaseData["supplierEntityType"] = supplier.entityType.rawValue
                 }
-                
-                middlemanCollectionName = collectionName
-                print("🔍 Searching for middleman in \(collectionName) collection")
-                
-                // Get middleman reference from appropriate collection
-                let middlemanQuery = db.collection(collectionName).whereField("name", isEqualTo: middleman.name).limit(to: 1)
-                let middlemanSnapshot = try await middlemanQuery.getDocuments()
-                
-                if let middlemanDoc = middlemanSnapshot.documents.first {
-                    print("✅ Found middleman document: \(middlemanDoc.documentID)")
-                    middlemanDocRef = middlemanDoc.reference
-                    purchaseData["middleman"] = middlemanDoc.reference
+            }
+            
+            // Add middleman details if applicable
+            if let middlemanDocRef = middlemanDocRef, useMiddlemanPayment {
+                if let middleman = selectedMiddleman {
+                    purchaseData["middleman"] = middlemanDocRef
                     purchaseData["middlemanName"] = middleman.name
                     purchaseData["middlemanEntityType"] = middleman.entityType.rawValue
                     purchaseData["middlemanPayment"] = [
@@ -3746,55 +4348,10 @@ extension PurchaseView {
                             "credit": middlemanCreditAmount
                         ]
                     ]
-                } else {
-                    print("❌ Middleman document not found in \(collectionName) collection for name: \(middleman.name)")
-                }
-            } else {
-                print("ℹ️ Middleman conditions not met - useMiddlemanPayment: \(useMiddlemanPayment), selectedMiddleman: \(selectedMiddleman?.name ?? "nil")")
-            }
-            
-            // Add supplier details if applicable
-            var supplierDocRef: DocumentReference?
-            var supplierCollectionName: String?
-            
-            if let supplier = selectedSupplier {
-                print("🏪 Adding supplier to purchase:")
-                print("   Name: \(supplier.name)")
-                print("   Type: \(supplier.entityType)")
-                
-                // Determine collection based on entity type
-                let collectionName: String
-                switch supplier.entityType {
-                case .customer:
-                    collectionName = "Customers"
-                case .supplier:
-                    collectionName = "Suppliers"
-                case .middleman:
-                    collectionName = "Middlemen"
-                }
-                
-                supplierCollectionName = collectionName
-                print("🔍 Searching for supplier in \(collectionName) collection")
-                
-                let supplierQuery = db.collection(collectionName).whereField("name", isEqualTo: supplier.name).limit(to: 1)
-                let supplierSnapshot = try await supplierQuery.getDocuments()
-                
-                if let supplierDoc = supplierSnapshot.documents.first {
-                    print("✅ Found supplier document: \(supplierDoc.documentID)")
-                    supplierDocRef = supplierDoc.reference
-                    purchaseData["supplier"] = supplierDoc.reference
-                    purchaseData["supplierName"] = supplier.name
-                    purchaseData["supplierEntityType"] = supplier.entityType.rawValue
-                } else {
-                    print("❌ Supplier document not found in \(collectionName) collection for name: \(supplier.name)")
                 }
             }
             
-            // Set purchase document in batch
-            print("💾 Adding purchase document to batch: \(purchaseDocRef.documentID)")
-            batch.setData(purchaseData, forDocument: purchaseDocRef)
-            
-            // Save order number to OrderNumbers collection
+            // Prepare order number data
             let orderNumberData: [String: Any] = [
                 "orderNumber": orderNumberInt,
                 "isCustom": isOrderNumberCustom,
@@ -3803,169 +4360,208 @@ extension PurchaseView {
                 "transactionDate": selectedDate
             ]
             
-            print("💾 Adding order number document to batch: \(orderNumberDocRef.documentID)")
-            batch.setData(orderNumberData, forDocument: orderNumberDocRef)
+            // IMPORTANT: Pre-fetch the documents needed for the transaction
+            // This helps ensure they exist and we have valid data before the transaction
+            print("🔍 Pre-fetching documents for transaction...")
             
-            // Update supplier document with transaction history and balance
-            if let supplierDocRef = supplierDocRef, let supplierCollectionName = supplierCollectionName {
-                print("🏪 Updating supplier document: \(supplierDocRef.documentID)")
+            // Pre-fetch supplier document
+            let supplierDoc = try await supplierDocRef?.getDocument()
+            if supplierDoc == nil || !supplierDoc!.exists {
+                throw NSError(domain: "ConfirmPayment", code: 12, userInfo: [
+                    NSLocalizedDescriptionKey: "Cannot fetch supplier document before transaction"
+                ])
+            }
+            print("✅ Successfully pre-fetched supplier document")
+            
+            // Pre-fetch middleman document if applicable
+            if let middlemanDocRef = middlemanDocRef, useMiddlemanPayment {
+                let middlemanDoc = try await middlemanDocRef.getDocument()
+                if !middlemanDoc.exists {
+                    throw NSError(domain: "ConfirmPayment", code: 13, userInfo: [
+                        NSLocalizedDescriptionKey: "Cannot fetch middleman document before transaction"
+                    ])
+                }
+                print("✅ Successfully pre-fetched middleman document")
+            }
+            
+            // Pre-fetch balance documents
+            let cashDocRef = db.collection("Balances").document("cash")
+            let bankDocRef = db.collection("Balances").document("bank")
+            let creditCardDocRef = db.collection("Balances").document("creditCard")
+            
+            let cashDoc = try await cashDocRef.getDocument()
+            let bankDoc = try await bankDocRef.getDocument()
+            let creditCardDoc = try await creditCardDocRef.getDocument()
+            
+            if !cashDoc.exists || !bankDoc.exists || !creditCardDoc.exists {
+                throw NSError(domain: "ConfirmPayment", code: 14, userInfo: [
+                    NSLocalizedDescriptionKey: "One or more balance documents don't exist"
+                ])
+            }
+            print("✅ Successfully pre-fetched balance documents")
+            
+            // PHASE 2: Run Firestore Transaction with pre-fetched data
+            print("🚀 PHASE 2: Running Firestore transaction...")
+            
+            // Store the supplier and middleman data to use in the transaction
+            let supplierData = supplierDoc!.data() ?? [:]
+            let supplierCurrentBalance = supplierData["balance"] as? Double ??
+                                       supplierData["Balance"] as? Double ??
+                                       supplierData["accountBalance"] as? Double ??
+                                       supplierData["AccountBalance"] as? Double ?? 0.0
+            
+            var middlemanData: [String: Any]?
+            var middlemanCurrentBalance: Double = 0.0
+            
+            if let middlemanDocRef = middlemanDocRef, useMiddlemanPayment {
+                let middlemanDoc = try await middlemanDocRef.getDocument()
+                middlemanData = middlemanDoc.data()
+                middlemanCurrentBalance = middlemanData?["balance"] as? Double ??
+                                        middlemanData?["Balance"] as? Double ??
+                                        middlemanData?["accountBalance"] as? Double ??
+                                        middlemanData?["AccountBalance"] as? Double ?? 0.0
+            }
+            
+            // Store balance data
+            let currentCashBalance = cashDoc.data()?["amount"] as? Double ?? 0.0
+            let currentBankBalance = bankDoc.data()?["amount"] as? Double ?? 0.0
+            let currentCreditCardBalance = creditCardDoc.data()?["amount"] as? Double ?? 0.0
+            
+            // Run the transaction with our pre-fetched data
+            try await db.runTransaction { transaction, errorPointer in
+                // 1. Create brand documents
+                for (brandData, brandDocRef) in brandsToCreate {
+                    transaction.setData(brandData, forDocument: brandDocRef)
+                }
                 
-                // Get current supplier document to read existing data
-                let supplierDoc = try await supplierDocRef.getDocument()
+                // 2. Create model documents
+                for (modelData, modelDocRef) in modelsToCreate {
+                    transaction.setData(modelData, forDocument: modelDocRef)
+                }
                 
-                if supplierDoc.exists {
-                    let supplierData = supplierDoc.data() ?? [:]
-                    var updatedData: [String: Any] = [:]
+                // 3. Create carrier documents
+                for (carrierData, carrierDocRef, _) in carriersToCreate {
+                    transaction.setData(carrierData, forDocument: carrierDocRef)
+                }
+                
+                // 4. Create color documents
+                for (colorData, colorDocRef, _) in colorsToCreate {
+                    transaction.setData(colorData, forDocument: colorDocRef)
+                }
+                
+                // 5. Create location documents
+                for (locationData, locationDocRef, _) in locationsToCreate {
+                    transaction.setData(locationData, forDocument: locationDocRef)
+                }
+                
+                // 6. Create phone documents and IMEI documents
+                for (phoneData, phoneDocRef, imei) in phonesToCreate {
+                    transaction.setData(phoneData, forDocument: phoneDocRef)
                     
-                    // Handle transaction history
+                    // Create IMEI document
+                    let imeiDocRef = db.collection("IMEI").document()
+                    transaction.setData([
+                        "imei": imei,
+                        "phoneReference": phoneDocRef,
+                        "createdAt": selectedDate
+                    ], forDocument: imeiDocRef)
+                }
+                
+                // 7. Create purchase document
+                transaction.setData(purchaseData, forDocument: purchaseDocRef)
+                
+                // 8. Create order number document
+                transaction.setData(orderNumberData, forDocument: orderNumberDocRef)
+                
+                // 9. Update supplier document
+                if let supplierDocRef = supplierDocRef {
+                    // Handle transaction history using pre-fetched data
                     var transactionHistory: [[String: Any]] = supplierData["transactionHistory"] as? [[String: Any]] ?? []
                     transactionHistory.append([
                         "purchaseReference": purchaseDocRef,
                         "timestamp": selectedDate,
                         "role": "supplier"
                     ])
-                    updatedData["transactionHistory"] = transactionHistory
-                    print("📝 Added transaction history entry for supplier")
                     
-                    // Handle balance update
-                    let currentBalance = supplierData["balance"] as? Double ?? supplierData["Balance"] as? Double ?? supplierData["accountBalance"] as? Double ?? supplierData["AccountBalance"] as? Double ?? 0.0
-                    let newBalance = currentBalance - abs(remainingCredit) // Always subtract the amount owed
-                    updatedData["balance"] = newBalance
+                    // Handle balance update using pre-fetched data
+                    let newBalance = supplierCurrentBalance - abs(remainingCredit)
                     
                     print("💰 Supplier balance update:")
-                    print("   Current balance: $\(currentBalance)")
+                    print("   Current balance: $\(supplierCurrentBalance)")
                     print("   Remaining credit: $\(remainingCredit)")
                     print("   New balance: $\(newBalance)")
                     
-                    // Update supplier document in batch
-                    batch.updateData(updatedData, forDocument: supplierDocRef)
-                } else {
-                    print("❌ Supplier document does not exist: \(supplierDocRef.documentID)")
+                    // Update supplier document
+                    transaction.updateData([
+                        "transactionHistory": transactionHistory,
+                        "balance": newBalance
+                    ], forDocument: supplierDocRef)
                 }
-            }
-            
-            // Update middleman document with transaction history and balance
-            if let middlemanDocRef = middlemanDocRef, let middlemanCollectionName = middlemanCollectionName {
-                print("🤝 Updating middleman document: \(middlemanDocRef.documentID)")
                 
-                // Get current middleman document to read existing data
-                let middlemanDoc = try await middlemanDocRef.getDocument()
-                
-                if middlemanDoc.exists {
-                    let middlemanData = middlemanDoc.data() ?? [:]
-                    var updatedData: [String: Any] = [:]
-                    
-                    // Handle transaction history
+                // 10. Update middleman document
+                if let middlemanDocRef = middlemanDocRef, useMiddlemanPayment, let middlemanData = middlemanData {
+                    // Handle transaction history using pre-fetched data
                     var transactionHistory: [[String: Any]] = middlemanData["transactionHistory"] as? [[String: Any]] ?? []
                     transactionHistory.append([
                         "purchaseReference": purchaseDocRef,
                         "timestamp": selectedDate,
                         "role": "middleman"
                     ])
-                    updatedData["transactionHistory"] = transactionHistory
-                    print("📝 Added transaction history entry for middleman")
                     
-                    // Handle balance update
-                    let currentBalance = middlemanData["balance"] as? Double ?? middlemanData["Balance"] as? Double ?? middlemanData["accountBalance"] as? Double ?? middlemanData["AccountBalance"] as? Double ?? 0.0
+                    // Handle balance update using pre-fetched data
                     let newBalance: Double
                     if middlemanUnit == "give" {
-                        newBalance = currentBalance - middlemanCreditAmount // Deduct credit amount when giving
+                        newBalance = middlemanCurrentBalance - middlemanCreditAmount
                     } else {
-                        newBalance = currentBalance + middlemanCreditAmount // Add credit amount when receiving
+                        newBalance = middlemanCurrentBalance + middlemanCreditAmount
                     }
-                    updatedData["balance"] = newBalance
                     
                     print("💰 Middleman balance update:")
-                    print("   Current balance: $\(currentBalance)")
+                    print("   Current balance: $\(middlemanCurrentBalance)")
                     print("   Unit: \(middlemanUnit)")
                     print("   Credit amount: $\(middlemanCreditAmount)")
                     print("   New balance: $\(newBalance)")
                     
-                    // Update middleman document in batch
-                    batch.updateData(updatedData, forDocument: middlemanDocRef)
-                } else {
-                    print("❌ Middleman document does not exist: \(middlemanDocRef.documentID)")
+                    // Update middleman document
+                    transaction.updateData([
+                        "transactionHistory": transactionHistory,
+                        "balance": newBalance
+                    ], forDocument: middlemanDocRef)
                 }
-            }
-            
-            // Update Balances collection with final payment amounts
-            print("💳 Updating Balances collection:")
-            
-            // Update cash balance
-            print("💰 Updating cash balance...")
-            let cashDocRef = db.collection("Balances").document("cash")
-            let cashDoc = try await cashDocRef.getDocument()
-            
-            if cashDoc.exists {
-                let cashData = cashDoc.data() ?? [:]
-                let currentCashBalance = cashData["amount"] as? Double ?? 0.0
+                
+                // 11. Update Balances collection using pre-fetched data
                 let newCashBalance = currentCashBalance - finalCash
+                let newBankBalance = currentBankBalance - finalBank
+                let newCreditCardBalance = currentCreditCardBalance - finalCard
                 
-                print("   Current cash balance: $\(currentCashBalance)")
-                print("   Final cash amount: $\(finalCash)")
-                print("   New cash balance: $\(newCashBalance)")
-                
-                batch.updateData([
+                // Update cash balance
+                transaction.updateData([
                     "amount": newCashBalance,
                     "updatedAt": selectedDate
                 ], forDocument: cashDocRef)
-            } else {
-                print("❌ Cash balance document does not exist")
-            }
-            
-            // Update bank balance
-            print("🏦 Updating bank balance...")
-            let bankDocRef = db.collection("Balances").document("bank")
-            let bankDoc = try await bankDocRef.getDocument()
-            
-            if bankDoc.exists {
-                let bankData = bankDoc.data() ?? [:]
-                let currentBankBalance = bankData["amount"] as? Double ?? 0.0
-                let newBankBalance = currentBankBalance - finalBank
                 
-                print("   Current bank balance: $\(currentBankBalance)")
-                print("   Final bank amount: $\(finalBank)")
-                print("   New bank balance: $\(newBankBalance)")
-                
-                batch.updateData([
+                // Update bank balance
+                transaction.updateData([
                     "amount": newBankBalance,
                     "updatedAt": selectedDate
                 ], forDocument: bankDocRef)
-            } else {
-                print("❌ Bank balance document does not exist")
-            }
-            
-            // Update credit card balance
-            print("💳 Updating credit card balance...")
-            let creditCardDocRef = db.collection("Balances").document("creditCard")
-            let creditCardDoc = try await creditCardDocRef.getDocument()
-            
-            if creditCardDoc.exists {
-                let creditCardData = creditCardDoc.data() ?? [:]
-                let currentCreditCardBalance = creditCardData["amount"] as? Double ?? 0.0
-                let newCreditCardBalance = currentCreditCardBalance - finalCard
                 
-                print("   Current credit card balance: $\(currentCreditCardBalance)")
-                print("   Final credit card amount: $\(finalCard)")
-                print("   New credit card balance: $\(newCreditCardBalance)")
-                
-                batch.updateData([
+                // Update credit card balance
+                transaction.updateData([
                     "amount": newCreditCardBalance,
                     "updatedAt": selectedDate
                 ], forDocument: creditCardDocRef)
-            } else {
-                print("❌ Credit card balance document does not exist")
+                
+                return nil
             }
             
-            // Commit the batch
-            print("🚀 Committing Firestore batch...")
-            try await batch.commit()
-            print("✅ Batch committed successfully!")
+            print("✅ Transaction committed successfully!")
             
-            // Clear cart and show success
+            // PHASE 3: Update UI only after successful transaction
             await MainActor.run {
                 print("🧹 Clearing cart and form data...")
                 cartItems.removeAll()
+                serviceItems.removeAll()
                 cashAmount = ""
                 bankAmount = ""
                 creditCardAmount = ""
@@ -3976,6 +4572,7 @@ extension PurchaseView {
                 middlemanCashAmount = ""
                 middlemanBankAmount = ""
                 middlemanCreditCardAmount = ""
+                isConfirmingPayment = false
                 showPaymentSuccess = true
                 print("🎉 Payment confirmation completed successfully!")
                 
@@ -3987,14 +4584,16 @@ extension PurchaseView {
             }
             
         } catch {
-            print("❌ Error confirming payment: \(error)")
+            print("❌ ERROR in confirmPayment: \(error)")
             print("📊 Error details: \(error.localizedDescription)")
-            // Handle error - could show alert to user
-        }
-        
-        await MainActor.run {
-            isConfirmingPayment = false
-            print("🏁 Payment confirmation process finished")
+            
+            // Update UI to show error
+            await MainActor.run {
+                isConfirmingPayment = false
+                validationAlertMessage = "Transaction failed: \(error.localizedDescription)"
+                showValidationAlert = true
+                print("🚫 Payment confirmation failed with error: \(error.localizedDescription)")
+            }
         }
     }
 }

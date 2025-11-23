@@ -67,6 +67,7 @@ enum EntityTransactionType: String {
     case currencyRegular = "Transaction"
     case currencyExchange = "Exchange"
     case expense = "Expense"
+    case balanceAdjustment = "Balance Adjustment"
     
     var color: Color {
         switch self {
@@ -76,6 +77,7 @@ enum EntityTransactionType: String {
         case .currencyRegular: return .orange
         case .currencyExchange: return .purple
         case .expense: return .red
+        case .balanceAdjustment: return .indigo
         }
     }
     
@@ -87,6 +89,7 @@ enum EntityTransactionType: String {
         case .currencyRegular: return "banknote.fill"
         case .currencyExchange: return "arrow.left.arrow.right.circle.fill"
         case .expense: return "arrow.down.circle.fill"
+        case .balanceAdjustment: return "pencil.circle.fill"
         }
     }
 }
@@ -105,6 +108,9 @@ struct EntityDetailView: View {
     @State private var isLoadingTransactions = false
     @State private var transactionError: String?
     @State private var searchText = ""
+    
+    // Balance adjustments
+    @State private var balanceAdjustments: [EntityTransaction] = []
     
     // Currency balances
     @State private var currencyBalances: [String: Double] = [:]
@@ -132,6 +138,12 @@ struct EntityDetailView: View {
     // Bill screen - using optional to ensure correct transaction
     @State private var selectedBillTransaction: (id: String, isSale: Bool)? = nil
     
+    // Ledger screen state
+    @State private var showingLedgerDateRangeDialog = false
+    @State private var ledgerStartDate: Date? = nil
+    @State private var ledgerEndDate: Date? = nil
+    @State private var showingLedgerScreen = false
+    
     // Filters
     @State private var filterPurchase = false
     @State private var filterSale = false
@@ -146,7 +158,9 @@ struct EntityDetailView: View {
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     
     private var filteredTransactions: [EntityTransaction] {
-        var filtered = transactions
+        var filtered = transactions + balanceAdjustments
+        // Sort by date descending (newest first) to maintain proper chronology
+        filtered = filtered.sorted { $0.date > $1.date }
         
         // Apply type filters
         // If none selected OR all selected, show all
@@ -162,6 +176,7 @@ struct EntityDetailView: View {
                 case .middleman: return filterMiddleman
                 case .currencyRegular, .currencyExchange: return filterCash
                 case .expense: return filterCash // Expenses use the same filter as cash for now
+                case .balanceAdjustment: return filterCash // Balance adjustments use the same filter as cash for now
                 }
             }
         }
@@ -285,11 +300,27 @@ struct EntityDetailView: View {
                 },
                 onDismiss: {
                     editingEntity = nil
-                }
+                },
+                allowBalanceEditing: false
             )
         }
         .sheet(isPresented: $showingBalanceEditSheet) {
             balanceEditSheet
+        }
+        .sheet(isPresented: $showingLedgerDateRangeDialog) {
+            LedgerDateRangeDialog(
+                startDate: $ledgerStartDate,
+                endDate: $ledgerEndDate,
+                onCancel: {
+                    showingLedgerDateRangeDialog = false
+                    ledgerStartDate = nil
+                    ledgerEndDate = nil
+                },
+                onGenerate: {
+                    showingLedgerDateRangeDialog = false
+                    showingLedgerScreen = true
+                }
+            )
         }
         #if os(iOS)
         .navigationDestination(isPresented: Binding(
@@ -310,6 +341,19 @@ struct EntityDetailView: View {
                 )
                 .navigationBarBackButtonHidden(true)
             }
+        }
+        .navigationDestination(isPresented: $showingLedgerScreen) {
+            LedgerScreen(
+                entity: currentEntity,
+                entityType: entityType,
+                transactions: getAllTransactionsForLedger(),
+                startDate: ledgerStartDate,
+                endDate: ledgerEndDate,
+                onClose: {
+                    showingLedgerScreen = false
+                }
+            )
+            .navigationBarBackButtonHidden(true)
         }
         #else
         .background(
@@ -337,10 +381,28 @@ struct EntityDetailView: View {
             )
             .hidden()
         )
+        .background(
+            NavigationLink(
+                destination: LedgerScreen(
+                    entity: currentEntity,
+                    entityType: entityType,
+                    transactions: getAllTransactionsForLedger(),
+                    startDate: ledgerStartDate,
+                    endDate: ledgerEndDate,
+                    onClose: {
+                        showingLedgerScreen = false
+                    }
+                ),
+                isActive: $showingLedgerScreen,
+                label: { EmptyView() }
+            )
+            .hidden()
+        )
         #endif
         .onAppear {
             setupListener()
             fetchTransactions()
+            fetchBalanceAdjustments()
             fetchCurrencyBalances()
             currencyManager.fetchCurrencies()
         }
@@ -436,10 +498,10 @@ struct EntityDetailView: View {
                             
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 10) {
-                                    TransactionFilterChip(title: "Purchase", isActive: $filterPurchase, color: .green)
-                                    TransactionFilterChip(title: "Sale", isActive: $filterSale, color: .blue)
+                                    TransactionFilterChip(title: "Purchase", isActive: $filterPurchase, color: Color.green)
+                                    TransactionFilterChip(title: "Sale", isActive: $filterSale, color: Color.blue)
                                     TransactionFilterChip(title: "Middleman", isActive: $filterMiddleman, color: Color(red: 0.80, green: 0.40, blue: 0.20))
-                                    TransactionFilterChip(title: "Transaction", isActive: $filterCash, color: .orange)
+                                    TransactionFilterChip(title: "Transaction", isActive: $filterCash, color: Color.orange)
                                 }
                                 .padding(.horizontal, 2)
                                 .padding(.bottom, 4)
@@ -977,21 +1039,44 @@ struct EntityDetailView: View {
                     }
                 }
                 
-                // Edit Button
-                Button(action: {
-                    editingEntity = entity
-                    showingEditDialog = true
-                }) {
-                    Image(systemName: "pencil")
-                        .font(.system(size: 12, weight: .semibold))
+                // Action Buttons Row
+                HStack(spacing: 12) {
+                    // Print Ledger Button
+                    Button(action: {
+                        showingLedgerDateRangeDialog = true
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "printer.fill")
+                                .font(.system(size: 11, weight: .semibold))
+                            Text("Print Ledger")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
                         .foregroundColor(.white)
-                        .frame(width: 24, height: 24)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
                         .background(
-                            Circle()
-                                .fill(entityType.color)
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color(red: 0.25, green: 0.33, blue: 0.54))
                         )
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    
+                    // Edit Button
+                    Button(action: {
+                        editingEntity = entity
+                        showingEditDialog = true
+                    }) {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 24, height: 24)
+                            .background(
+                                Circle()
+                                    .fill(entityType.color)
+                            )
+                    }
+                    .buttonStyle(PlainButtonStyle())
                 }
-                .buttonStyle(PlainButtonStyle())
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
         }
@@ -1036,22 +1121,45 @@ struct EntityDetailView: View {
                 
                 Spacer()
                 
-                // Edit Button - smaller and cleaner
-                Button(action: {
-                    editingEntity = entity
-                    showingEditDialog = true
-                }) {
-                    Image(systemName: "pencil")
-                        .font(.system(size: 12, weight: .medium))
+                // Action Buttons
+                HStack(spacing: 8) {
+                    // Print Ledger Button
+                    Button(action: {
+                        showingLedgerDateRangeDialog = true
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "printer.fill")
+                                .font(.system(size: 11, weight: .medium))
+                            Text("Ledger")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
                         .foregroundColor(.white)
-                        .frame(width: 28, height: 28)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
                         .background(
-                            Circle()
-                                .fill(entityType.color)
-                                .shadow(color: entityType.color.opacity(0.2), radius: 2, x: 0, y: 1)
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color(red: 0.25, green: 0.33, blue: 0.54))
                         )
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    
+                    // Edit Button - smaller and cleaner
+                    Button(action: {
+                        editingEntity = entity
+                        showingEditDialog = true
+                    }) {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.white)
+                            .frame(width: 28, height: 28)
+                            .background(
+                                Circle()
+                                    .fill(entityType.color)
+                                    .shadow(color: entityType.color.opacity(0.2), radius: 2, x: 0, y: 1)
+                            )
+                    }
+                    .buttonStyle(PlainButtonStyle())
                 }
-                .buttonStyle(PlainButtonStyle())
             }
             
             // Balance Card - with all currencies in one card
@@ -1469,8 +1577,9 @@ struct EntityDetailView: View {
         print("🗑️ Removing transaction from local list: \(id)")
         withAnimation {
             transactions.removeAll { $0.id == id }
+            balanceAdjustments.removeAll { $0.id == id }
         }
-        print("✅ Transaction removed from list. Remaining transactions: \(transactions.count)")
+        print("✅ Transaction removed from list. Remaining transactions: \(transactions.count), balance adjustments: \(balanceAdjustments.count)")
     }
     
     // MARK: - Fetch Transactions
@@ -1528,8 +1637,15 @@ struct EntityDetailView: View {
                     
                     // Collect all results
                     var allTransactions: [EntityTransaction] = []
+                    var seenIDs: Set<String> = []
                     for try await transactions in group {
-                        allTransactions.append(contentsOf: transactions)
+                        for transaction in transactions {
+                            // Deduplicate by ID to avoid duplicates
+                            if !seenIDs.contains(transaction.id) {
+                                allTransactions.append(transaction)
+                                seenIDs.insert(transaction.id)
+                            }
+                        }
                     }
                     return allTransactions
                 }
@@ -1754,6 +1870,92 @@ struct EntityDetailView: View {
         return currencyTransactions
     }
     
+    private func fetchBalanceAdjustments() {
+        Task {
+            do {
+                let db = Firestore.firestore()
+                
+                // Fetch balance adjustments for this entity (no orderBy to avoid index requirement)
+                let snapshot = try await db.collection("BalanceAdjustments")
+                    .whereField("entityId", isEqualTo: entity.id)
+                    .getDocuments()
+                
+                var adjustments: [EntityTransaction] = []
+                
+                for doc in snapshot.documents {
+                    let data = doc.data()
+                    
+                    let timestamp = data["timestamp"] as? Timestamp
+                    let date = timestamp?.dateValue() ?? Date()
+                    
+                    let initialBalance = data["initialBalance"] as? Double ?? 0.0
+                    let finalBalance = data["finalBalance"] as? Double ?? 0.0
+                    let currency = data["currency"] as? String ?? "CAD"
+                    let adjustmentType = data["adjustmentType"] as? String ?? "To Receive"
+                    
+                    // Create transaction from balance adjustment
+                    let transaction = EntityTransaction(
+                        id: doc.documentID,
+                        type: .balanceAdjustment,
+                        date: date,
+                        amount: finalBalance,
+                        role: "balance_adjustment",
+                        orderNumber: nil,
+                        grandTotal: nil,
+                        paid: nil,
+                        credit: nil,
+                        gstAmount: nil,
+                        pstAmount: nil,
+                        notes: "Balance adjusted from \(String(format: "%.2f", initialBalance)) to \(String(format: "%.2f", finalBalance)) (\(adjustmentType))",
+                        itemCount: nil,
+                        cashPaid: nil,
+                        bankPaid: nil,
+                        creditCardPaid: nil,
+                        middlemanCash: nil,
+                        middlemanBank: nil,
+                        middlemanCreditCard: nil,
+                        middlemanCredit: nil,
+                        middlemanUnit: nil,
+                        middlemanName: nil,
+                        sourceCollection: nil,
+                        currencyGiven: currency,
+                        currencyName: currency,
+                        giver: nil,
+                        giverName: nil,
+                        taker: nil,
+                        takerName: nil,
+                        isExchange: nil,
+                        receivingCurrency: nil,
+                        receivedAmount: nil,
+                        customExchangeRate: nil,
+                        balancesAfterTransaction: [
+                            "initialBalance": initialBalance,
+                            "finalBalance": finalBalance,
+                            "adjustmentAmount": finalBalance - initialBalance,
+                            "adjustmentType": adjustmentType,
+                            "currency": currency,
+                            "entityId": data["entityId"] as? String ?? "",
+                            "entityType": data["entityType"] as? String ?? ""
+                        ]
+                    )
+                    
+                    adjustments.append(transaction)
+                }
+                
+                // Sort by date descending (newest first) in memory
+                let sortedAdjustments = adjustments.sorted { $0.date > $1.date }
+                
+                await MainActor.run {
+                    self.balanceAdjustments = sortedAdjustments
+                    print("✅ Loaded \(sortedAdjustments.count) balance adjustments")
+                }
+                
+            } catch {
+                print("❌ Error loading balance adjustments: \(error)")
+            }
+        }
+    }
+    
     private func fetchCurrencyBalances() {
         guard !entity.id.isEmpty else { return }
         
@@ -1783,6 +1985,17 @@ struct EntityDetailView: View {
     
     private func getCurrencySymbol(for currencyName: String) -> String {
         return currencyManager.allCurrencies.first { $0.name == currencyName }?.symbol ?? currencyName
+    }
+    
+    // Get all transactions for ledger (excludes balance adjustments, sorted chronologically)
+    private func getAllTransactionsForLedger() -> [EntityTransaction] {
+        // Combine all transaction types: purchases, sales, currency (exclude balance adjustments)
+        let allTransactions = transactions.filter { $0.type != .balanceAdjustment }
+        
+        // Sort chronologically (oldest first for ledger)
+        let sorted = allTransactions.sorted { $0.date < $1.date }
+        
+        return sorted
     }
     
     var balanceEditSheet: some View {
@@ -1978,6 +2191,18 @@ struct EntityDetailView: View {
         do {
             let db = Firestore.firestore()
             
+            // Get initial balance before updating
+            var initialBalance: Double = 0.0
+            let currency = editingBalanceCurrency ?? "CAD"
+            
+            if editingBalanceCurrency == nil {
+                // Get current CAD balance from entity
+                initialBalance = currentEntity.balance
+            } else {
+                // Get current currency balance
+                initialBalance = currencyBalances[editingBalanceCurrency!] ?? 0.0
+            }
+            
             if editingBalanceCurrency == nil {
                 // Update CAD balance in entity collection
                 try await db.collection(entityType.collectionName)
@@ -2009,6 +2234,23 @@ struct EntityDetailView: View {
                 
                 print("✅ Updated \(editingBalanceCurrency!) balance to \(finalBalance)")
             }
+            
+            // Store balance adjustment history
+            let adjustmentData: [String: Any] = [
+                "entityId": entity.id,
+                "entityType": entityType.rawValue,
+                "entityName": currentEntity.name,
+                "currency": currency,
+                "initialBalance": initialBalance,
+                "finalBalance": finalBalance,
+                "adjustmentAmount": finalBalance - initialBalance,
+                "adjustmentType": balanceEditType.rawValue,
+                "timestamp": Timestamp(),
+                "createdAt": Timestamp()
+            ]
+            
+            try await db.collection("BalanceAdjustments").addDocument(data: adjustmentData)
+            print("✅ Stored balance adjustment history: \(currency) from \(initialBalance) to \(finalBalance)")
             
             // Refresh data
             await MainActor.run {
@@ -2138,6 +2380,13 @@ struct EntityTransactionRowView: View {
             } else {
                 return .orange // Other color for all other cases
             }
+        case .balanceAdjustment:
+            // Balance adjustments: green if To Receive, red if To Give
+            if let balances = transaction.balancesAfterTransaction,
+               let adjustmentType = balances["adjustmentType"] as? String {
+                return adjustmentType == "To Receive" ? .green : .red
+            }
+            return .indigo // Default fallback
         }
     }
     
@@ -2184,7 +2433,21 @@ struct EntityTransactionRowView: View {
                 deleteTransaction()
             }
         } message: {
-            Text("Are you sure you want to delete this transaction? This will reverse all balance changes and cannot be undone.")
+            if transaction.type == .balanceAdjustment {
+                let balances = transaction.balancesAfterTransaction ?? [:]
+                let initialBalance = balances["initialBalance"] as? Double ?? 0.0
+                let finalBalance = balances["finalBalance"] as? Double ?? transaction.amount
+                let adjustmentAmount = balances["adjustmentAmount"] as? Double ?? (finalBalance - initialBalance)
+                let currency = transaction.currencyName ?? "CAD"
+                let currencySymbol = currency == "CAD" ? "$" : currency
+                let adjustmentSign = adjustmentAmount >= 0 ? "+" : ""
+                let reverseAdjustment = -adjustmentAmount
+                let reverseSign = reverseAdjustment >= 0 ? "+" : ""
+                
+                return Text("Are you sure you want to reverse this balance adjustment?\n\nAdjustment made: \(adjustmentSign)\(currencySymbol)\(String(format: "%.2f", abs(adjustmentAmount)))\nWill reverse by: \(reverseSign)\(currencySymbol)\(String(format: "%.2f", abs(reverseAdjustment)))\n\nThis will add/subtract the adjustment amount from the current balance.\n\nThis action cannot be undone.")
+            } else {
+                return Text("Are you sure you want to delete this transaction? This will reverse all balance changes and cannot be undone.")
+            }
         }
         .onChange(of: showingDeleteConfirmation) { newValue in
             print("🔔 showingDeleteConfirmation changed to: \(newValue)")
@@ -2200,6 +2463,8 @@ struct EntityTransactionRowView: View {
             compactCurrencyAmountDisplay
         } else if transaction.type == .expense {
             compactExpenseAmountDisplay
+        } else if transaction.type == .balanceAdjustment {
+            compactBalanceAdjustmentAmountDisplay
         } else {
             compactPurchaseSaleAmountDisplay
         }
@@ -2244,6 +2509,36 @@ struct EntityTransactionRowView: View {
             color: color,
             hasBackground: true
         )
+    }
+    
+    private var compactBalanceAdjustmentAmountDisplay: some View {
+        let balances = transaction.balancesAfterTransaction ?? [:]
+        let initialBalance = balances["initialBalance"] as? Double ?? 0.0
+        let finalBalance = balances["finalBalance"] as? Double ?? transaction.amount
+        let currency = transaction.currencyName ?? "CAD"
+        let currencySymbol = currency == "CAD" ? "$" : currency
+        
+        let initialSign = initialBalance < 0 ? "-" : ""
+        let finalSign = finalBalance < 0 ? "-" : ""
+        let initialText = "\(initialSign)\(currencySymbol)\(String(format: "%.2f", abs(initialBalance)))"
+        let finalText = "\(finalSign)\(currencySymbol)\(String(format: "%.2f", abs(finalBalance)))"
+        let text = "\(initialText) → \(finalText)"
+        let color = getPaidColor()
+        
+        // Large format display for balance adjustments
+        return Text(text)
+            .font(.system(size: 24, weight: .bold))
+            .foregroundColor(color)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 16)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(color.opacity(0.1))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(color.opacity(0.2), lineWidth: 1)
+            )
     }
     
     private var compactPurchaseSaleAmountDisplay: some View {
@@ -2319,6 +2614,21 @@ struct EntityTransactionRowView: View {
             .background(
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color.secondary.opacity(0.08))
+            )
+        } else if transaction.type == .balanceAdjustment {
+            HStack(spacing: 4) {
+                Image(systemName: "pencil.circle.fill")
+                    .font(.system(size: 11))
+                    .foregroundColor(transaction.type.color)
+                Text(transaction.currencyName == "CAD" ? "$" : (transaction.currencyName ?? "$"))
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(transaction.type.color.opacity(0.1))
             )
         } else if transaction.type == .expense {
             // For expenses, show category or notes
@@ -2430,6 +2740,36 @@ struct EntityTransactionRowView: View {
     }
     
     @ViewBuilder
+    private var compactBalanceAdjustmentDetails: some View {
+        VStack(alignment: .trailing, spacing: 5) {
+            let balances = transaction.balancesAfterTransaction ?? [:]
+            let initialBalance = balances["initialBalance"] as? Double ?? 0.0
+            let finalBalance = balances["finalBalance"] as? Double ?? transaction.amount
+            let currency = transaction.currencyName ?? "CAD"
+            let currencySymbol = currency == "CAD" ? "$" : currency
+            
+            let initialSign = initialBalance < 0 ? "-" : ""
+            let finalSign = finalBalance < 0 ? "-" : ""
+            
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.left")
+                    .font(.system(size: 13))
+                Text("Initial: \(initialSign)\(currencySymbol)\(String(format: "%.2f", abs(initialBalance)))")
+                    .font(.system(size: 14, weight: .medium))
+            }
+            .foregroundColor(.secondary)
+            
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 13))
+                Text("Final: \(finalSign)\(currencySymbol)\(String(format: "%.2f", abs(finalBalance)))")
+                    .font(.system(size: 14, weight: .medium))
+            }
+            .foregroundColor(getPaidColor())
+        }
+    }
+    
+    @ViewBuilder
     private var compactPaidCreditDetails: some View {
         VStack(alignment: .trailing, spacing: 5) {
             if let paid = transaction.paid, paid > 0 {
@@ -2459,55 +2799,113 @@ struct EntityTransactionRowView: View {
         Button(action: {
             showingTransactionDetail = true
         }) {
-            VStack(alignment: .leading, spacing: 14) {
-                // Top row: Date, Type badge
-                HStack(alignment: .center) {
-                    // Date and Time
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(dateFormatter.string(from: transaction.date))
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(.primary)
+            Group {
+                if transaction.type == .balanceAdjustment {
+                // Simplified layout for balance adjustments
+                VStack(alignment: .leading, spacing: 14) {
+                    // Top row: Date/Time and Type badge in same row
+                    HStack(alignment: .center) {
+                        // Date and Time
+                        HStack(spacing: 8) {
+                            Text(dateFormatter.string(from: transaction.date))
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(.primary)
+                            
+                            Text(timeFormatter.string(from: transaction.date))
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
                         
-                        Text(timeFormatter.string(from: transaction.date))
-                            .font(.system(size: 12))
-                            .foregroundColor(.secondary)
+                        Spacer()
+                        
+                        // Type Badge
+                        HStack(spacing: 4) {
+                            Image(systemName: transaction.type.icon)
+                                .font(.system(size: 11, weight: .medium))
+                            Text(transaction.type.rawValue)
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(
+                            Capsule()
+                                .fill(transaction.type.color)
+                                .shadow(color: transaction.type.color.opacity(0.3), radius: 2, x: 0, y: 1)
+                        )
                     }
                     
-                    Spacer()
-                    
-                    // Type Badge
-                    HStack(spacing: 4) {
-                        Image(systemName: transaction.type.icon)
-                            .font(.system(size: 11, weight: .medium))
-                        Text(transaction.type.rawValue)
-                            .font(.system(size: 12, weight: .semibold))
+                    // Main Amount Section - centered
+                    HStack {
+                        Spacer()
+                        compactAmountDisplay
+                        Spacer()
                     }
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(
-                        Capsule()
-                            .fill(transaction.type.color)
-                            .shadow(color: transaction.type.color.opacity(0.3), radius: 2, x: 0, y: 1)
-                    )
-                }
-                
-                // Main Amount Section
-                HStack(alignment: .center) {
-                    compactAmountDisplay
                     
-                    Spacer()
-                    
-                    compactRightBadge
+                    // View Details button at bottom
+                    HStack {
+                        Spacer()
+                        HStack(spacing: 5) {
+                            Text("View Details")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(.blue)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(.blue)
+                        }
+                    }
                 }
-                
-                // Transaction Details Section
-                if transaction.type == .purchase || transaction.type == .sale || transaction.type == .middleman || transaction.type == .expense {
+            } else {
+                // Original layout for other transaction types
+                VStack(alignment: .leading, spacing: 14) {
+                    // Top row: Date, Type badge
+                    HStack(alignment: .center) {
+                        // Date and Time
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(dateFormatter.string(from: transaction.date))
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundColor(.primary)
+                            
+                            Text(timeFormatter.string(from: transaction.date))
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Spacer()
+                        
+                        // Type Badge
+                        HStack(spacing: 4) {
+                            Image(systemName: transaction.type.icon)
+                                .font(.system(size: 11, weight: .medium))
+                            Text(transaction.type.rawValue)
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(
+                            Capsule()
+                                .fill(transaction.type.color)
+                                .shadow(color: transaction.type.color.opacity(0.3), radius: 2, x: 0, y: 1)
+                        )
+                    }
+                    
+                    // Main Amount Section
+                    HStack(alignment: .center) {
+                        compactAmountDisplay
+                        
+                        Spacer()
+                        
+                        compactRightBadge
+                    }
+                    
+                    // Transaction Details Section
+                    if transaction.type == .purchase || transaction.type == .sale || transaction.type == .middleman || transaction.type == .expense {
                     VStack(alignment: .leading, spacing: 8) {
                         // Item count and Paid/Credit row
                         HStack(alignment: .top) {
                             // Show item count (for purchase/sale only)
-                            if transaction.type != .middleman && transaction.type != .expense, let itemCount = transaction.itemCount {
+                            if transaction.type != .middleman && transaction.type != .expense && transaction.type != .balanceAdjustment, let itemCount = transaction.itemCount {
                                 HStack(spacing: 5) {
                                     Image(systemName: "shippingbox.fill")
                                         .font(.system(size: 13))
@@ -2541,58 +2939,62 @@ struct EntityTransactionRowView: View {
                             .padding(.vertical, 4)
                         
                         // Notes and View Details in same row
-                        if let notes = transaction.notes, !notes.isEmpty {
-                            HStack(alignment: .center) {
-                                HStack(spacing: 5) {
-                                    Text("Notes:")
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .foregroundColor(.secondary)
-                                    Text(notes)
-                                        .font(.system(size: 13))
-                                        .foregroundColor(.secondary)
+                        if true {
+                            if let notes = transaction.notes, !notes.isEmpty {
+                                HStack(alignment: .center) {
+                                    HStack(spacing: 5) {
+                                        Text("Notes:")
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundColor(.secondary)
+                                        Text(notes)
+                                            .font(.system(size: 13))
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .lineLimit(1)
+                                    
+                                    Spacer()
+                                    
+                                    HStack(spacing: 5) {
+                                        Text("View Details")
+                                            .font(.system(size: 13, weight: .medium))
+                                            .foregroundColor(.blue)
+                                        Image(systemName: "chevron.right")
+                                            .font(.system(size: 11, weight: .semibold))
+                                            .foregroundColor(.blue)
+                                    }
                                 }
-                                .lineLimit(1)
-                                
-                                Spacer()
-                                
-                                HStack(spacing: 5) {
-                                    Text("View Details")
-                                        .font(.system(size: 13, weight: .medium))
-                                        .foregroundColor(.blue)
-                                    Image(systemName: "chevron.right")
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .foregroundColor(.blue)
-                                }
-                            }
-                        } else {
-                            // View Details when no notes
-                            HStack {
-                                Spacer()
-                                HStack(spacing: 5) {
-                                    Text("View Details")
-                                        .font(.system(size: 13, weight: .medium))
-                                        .foregroundColor(.blue)
-                                    Image(systemName: "chevron.right")
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .foregroundColor(.blue)
+                            } else {
+                                // View Details when no notes
+                                HStack {
+                                    Spacer()
+                                    HStack(spacing: 5) {
+                                        Text("View Details")
+                                            .font(.system(size: 13, weight: .medium))
+                                            .foregroundColor(.blue)
+                                        Image(systemName: "chevron.right")
+                                            .font(.system(size: 11, weight: .semibold))
+                                            .foregroundColor(.blue)
+                                    }
                                 }
                             }
                         }
                     }
-                } else {
-                    // For non-purchase/sale transactions, just show View Details
-                    HStack {
-                        Spacer()
-                        HStack(spacing: 5) {
-                            Text("View Details")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundColor(.blue)
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundColor(.blue)
+                    } else {
+                        // For non-purchase/sale transactions, just show View Details
+                        HStack {
+                            Spacer()
+                            HStack(spacing: 5) {
+                                Text("View Details")
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundColor(.blue)
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundColor(.blue)
+                            }
                         }
                     }
                 }
+            }
             }
             .padding(18)
             .background(
@@ -2680,7 +3082,30 @@ struct EntityTransactionRowView: View {
                     .foregroundColor(.secondary)
                 
                 if transaction.type == .currencyRegular || transaction.type == .currencyExchange {
-                    Text("\(getPaidSign()) \(String(format: "%.2f", transaction.amount)) \(transaction.currencyName ?? "")")
+                    let currency = transaction.currencyName ?? ""
+                    let currencySymbol = currency == "CAD" ? "$" : currency
+                    Text("\(getPaidSign()) \(String(format: "%.2f", transaction.amount)) \(currencySymbol)")
+                        .font(.system(size: 28, weight: .bold, design: .rounded))
+                        .foregroundColor(getPaidColor())
+                        .padding(.vertical, 8)
+                        .padding(.horizontal, 16)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(getPaidColor().opacity(0.1))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(getPaidColor().opacity(0.2), lineWidth: 1)
+                        )
+                } else if transaction.type == .balanceAdjustment {
+                    let balances = transaction.balancesAfterTransaction ?? [:]
+                    let initialBalance = balances["initialBalance"] as? Double ?? 0.0
+                    let finalBalance = balances["finalBalance"] as? Double ?? transaction.amount
+                    let currency = transaction.currencyName ?? "CAD"
+                    let currencySymbol = currency == "CAD" ? "$" : currency
+                    let initialSign = initialBalance < 0 ? "-" : ""
+                    let finalSign = finalBalance < 0 ? "-" : ""
+                    Text("\(initialSign)\(currencySymbol)\(String(format: "%.2f", abs(initialBalance))) → \(finalSign)\(currencySymbol)\(String(format: "%.2f", abs(finalBalance)))")
                         .font(.system(size: 28, weight: .bold, design: .rounded))
                         .foregroundColor(getPaidColor())
                         .padding(.vertical, 8)
@@ -2749,6 +3174,23 @@ struct EntityTransactionRowView: View {
                         if let notes = transaction.notes, !notes.isEmpty {
                             detailRow(label: "Notes", value: notes, color: nil, icon: "note.text")
                         }
+                    }
+                } else if transaction.type == .balanceAdjustment {
+                    // Balance adjustment details
+                    VStack(alignment: .leading, spacing: 14) {
+                        sectionHeader(title: "Balance Adjustment Details", icon: "pencil.circle.fill")
+                        
+                        let balances = transaction.balancesAfterTransaction ?? [:]
+                        let initialBalance = balances["initialBalance"] as? Double ?? 0.0
+                        let finalBalance = balances["finalBalance"] as? Double ?? transaction.amount
+                        let currency = transaction.currencyName ?? "CAD"
+                        let currencySymbol = currency == "CAD" ? "$" : currency
+                        
+                        let initialSign = initialBalance < 0 ? "-" : ""
+                        let finalSign = finalBalance < 0 ? "-" : ""
+                        
+                        detailRow(label: "Initial Balance", value: "\(initialSign)\(currencySymbol)\(String(format: "%.2f", abs(initialBalance)))", color: .secondary, icon: "arrow.left")
+                        detailRow(label: "Final Balance", value: "\(finalSign)\(currencySymbol)\(String(format: "%.2f", abs(finalBalance)))", color: getPaidColor(), icon: "arrow.right")
                     }
                 } else {
                     // Currency transaction details
@@ -3006,9 +3448,9 @@ struct EntityTransactionRowView: View {
             }
             
             // Delete Button
-            // Show delete button for currency, purchase, sale, or expense (if onTransactionDeleted is provided)
+            // Show delete button for currency, purchase, sale, expense (if onTransactionDeleted is provided), or balance adjustment
             if transaction.type == .currencyRegular || transaction.type == .purchase || transaction.type == .sale || 
-               (transaction.type == .expense && onTransactionDeleted != nil) {
+               (transaction.type == .expense && onTransactionDeleted != nil) || transaction.type == .balanceAdjustment {
                 Button(action: {
                     showingTransactionDetail = false
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
@@ -3192,6 +3634,25 @@ struct EntityTransactionRowView: View {
                     }
                     .frame(width: orderWidth, alignment: .leading)
                     .padding(.horizontal, columnPadding)
+                } else if transaction.type == .balanceAdjustment {
+                    // Column 2: Show initial → final
+                    VStack(alignment: .leading, spacing: 6) {
+                        let balances = transaction.balancesAfterTransaction ?? [:]
+                        let initialBalance = balances["initialBalance"] as? Double ?? 0.0
+                        let finalBalance = balances["finalBalance"] as? Double ?? transaction.amount
+                        let currency = transaction.currencyName ?? "CAD"
+                        let currencySymbol = currency == "CAD" ? "$" : currency
+                        
+                        let initialSign = initialBalance < 0 ? "-" : ""
+                        let finalSign = finalBalance < 0 ? "-" : ""
+                        
+                        Text("\(initialSign)\(currencySymbol)\(String(format: "%.2f", abs(initialBalance))) → \(finalSign)\(currencySymbol)\(String(format: "%.2f", abs(finalBalance)))")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(getPaidColor())
+                            .minimumScaleFactor(0.7)
+                    }
+                    .frame(width: orderWidth, alignment: .leading)
+                    .padding(.horizontal, columnPadding)
                 } else if transaction.type == .expense {
                     // Expense transactions - show category and notes
                     VStack(alignment: .leading, spacing: 6) {
@@ -3237,13 +3698,31 @@ struct EntityTransactionRowView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     if transaction.type == .currencyRegular || transaction.type == .currencyExchange {
                         Spacer().frame(height: 4 * scale)
-                        Text("\(getPaidSign())\(String(format: "%.2f", transaction.amount)) \(transaction.currencyName ?? "")")
+                        let currency = transaction.currencyName ?? ""
+                        let currencySymbol = currency == "CAD" ? "$" : currency
+                        Text("\(getPaidSign())\(String(format: "%.2f", transaction.amount)) \(currencySymbol)")
                             .font(.system(size: 12, weight: .bold))
                             .foregroundColor(getPaidColor())
                             .padding(.horizontal, max(4, 6 * scale))
                             .padding(.vertical, max(2, 3 * scale))
                             .background(getPaidColor().opacity(0.08))
                             .cornerRadius(4)
+                            .minimumScaleFactor(0.7)
+                    } else if transaction.type == .balanceAdjustment {
+                        // Column 3: Show initial amount
+                        let balances = transaction.balancesAfterTransaction ?? [:]
+                        let initialBalance = balances["initialBalance"] as? Double ?? 0.0
+                        let currency = transaction.currencyName ?? "CAD"
+                        let currencySymbol = currency == "CAD" ? "$" : currency
+                        let initialSign = initialBalance < 0 ? "-" : ""
+                        
+                        Text("Initial")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(.secondary)
+                            .minimumScaleFactor(0.75)
+                        Text("\(initialSign)\(currencySymbol)\(String(format: "%.2f", abs(initialBalance)))")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(.secondary)
                             .minimumScaleFactor(0.7)
                     } else if transaction.type == .expense {
                         Text("Total")
@@ -3272,7 +3751,23 @@ struct EntityTransactionRowView: View {
                 
                 // Paid Column
                 VStack(alignment: .leading, spacing: 4) {
-                    if transaction.type == .currencyRegular || transaction.type == .currencyExchange {
+                    if transaction.type == .balanceAdjustment {
+                        // Column 4: Show final amount
+                        let balances = transaction.balancesAfterTransaction ?? [:]
+                        let finalBalance = balances["finalBalance"] as? Double ?? transaction.amount
+                        let currency = transaction.currencyName ?? "CAD"
+                        let currencySymbol = currency == "CAD" ? "$" : currency
+                        let finalSign = finalBalance < 0 ? "-" : ""
+                        
+                        Text("Final")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(.secondary)
+                            .minimumScaleFactor(0.75)
+                        Text("\(finalSign)\(currencySymbol)\(String(format: "%.2f", abs(finalBalance)))")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(getPaidColor())
+                            .minimumScaleFactor(0.7)
+                    } else if transaction.type == .currencyRegular || transaction.type == .currencyExchange {
                         Spacer()
                     } else if transaction.type == .expense {
                         // For expenses, show paid amount (calculated from payment split)
@@ -3312,7 +3807,10 @@ struct EntityTransactionRowView: View {
                 
                 // Credit Column
                 VStack(alignment: .leading, spacing: 4) {
-                    if transaction.type == .currencyRegular || transaction.type == .currencyExchange {
+                    if transaction.type == .balanceAdjustment {
+                        // Column 5: Empty for balance adjustments
+                        Spacer()
+                    } else if transaction.type == .currencyRegular || transaction.type == .currencyExchange {
                         Spacer()
                     } else if transaction.type == .expense {
                         // Expenses don't have credit - they're fully paid
@@ -3354,7 +3852,12 @@ struct EntityTransactionRowView: View {
                 Divider().frame(height: 70)
                 
                 // Payment Methods Column OR Giver Balances
-                if transaction.type == .purchase || transaction.type == .sale || transaction.type == .middleman || transaction.type == .expense {
+                if transaction.type == .balanceAdjustment {
+                    // Column 6: Empty for balance adjustments
+                    VStack {}
+                        .frame(width: paymentWidth)
+                        .padding(.horizontal, columnPadding)
+                } else if transaction.type == .purchase || transaction.type == .sale || transaction.type == .middleman || transaction.type == .expense {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Payment Methods")
                             .font(.system(size: 10, weight: .bold))
@@ -3460,7 +3963,12 @@ struct EntityTransactionRowView: View {
                 Divider().frame(height: 70)
                 
                 // Middleman Column OR Taker Balances
-                if transaction.type == .purchase || transaction.type == .sale || transaction.type == .middleman {
+                if transaction.type == .balanceAdjustment {
+                    // Column 7: Empty for balance adjustments
+                    VStack {}
+                        .frame(width: adjustedMiddlemanWidth)
+                        .padding(.horizontal, widePadding)
+                } else if transaction.type == .purchase || transaction.type == .sale || transaction.type == .middleman {
                     VStack(alignment: .leading, spacing: 6) {
                         if let middlemanName = transaction.middlemanName {
                             Text("Middleman (\(middlemanName))")
@@ -3654,7 +4162,7 @@ struct EntityTransactionRowView: View {
                         print("🖱️ [FULL VIEW] Delete button clicked for transaction: \(transaction.id)")
                         print("📋 Transaction type: \(transaction.type.rawValue)")
                         if transaction.type == .currencyRegular || transaction.type == .purchase || transaction.type == .sale || 
-                           (transaction.type == .expense && onTransactionDeleted != nil) {
+                           (transaction.type == .expense && onTransactionDeleted != nil) || transaction.type == .balanceAdjustment {
                             print("✅ Setting showingDeleteConfirmation to true")
                             showingDeleteConfirmation = true
                         } else {
@@ -3664,13 +4172,13 @@ struct EntityTransactionRowView: View {
                         Image(systemName: "trash")
                             .font(.system(size: 16, weight: .medium))
                             .foregroundColor((transaction.type == .currencyRegular || transaction.type == .purchase || transaction.type == .sale || 
-                                            (transaction.type == .expense && onTransactionDeleted != nil)) ? .red : .gray)
+                                            (transaction.type == .expense && onTransactionDeleted != nil) || transaction.type == .balanceAdjustment) ? .red : .gray)
                             .frame(width: buttonWidth)
                             .padding(.vertical, max(10, 14 * scale))
                     }
                     .buttonStyle(PlainButtonStyle())
                     .disabled(!(transaction.type == .currencyRegular || transaction.type == .purchase || transaction.type == .sale || 
-                               (transaction.type == .expense && onTransactionDeleted != nil)) || isDeleting)
+                               (transaction.type == .expense && onTransactionDeleted != nil) || transaction.type == .balanceAdjustment) || isDeleting)
                 }
                 .frame(width: buttonsColumnWidth, alignment: .center)
                 .padding(.horizontal, columnPadding)
@@ -4072,6 +4580,133 @@ struct EntityTransactionRowView: View {
             // Commit all changes atomically
             try await batch.commit()
             print("✅✅✅ Expense transaction reversal completed successfully!")
+        } else if transaction.type == .balanceAdjustment {
+            print("⚖️ Handling BALANCE ADJUSTMENT reversal...")
+            
+            guard let balances = transaction.balancesAfterTransaction else {
+                throw NSError(domain: "BalanceAdjustmentError", code: 400,
+                             userInfo: [NSLocalizedDescriptionKey: "Missing balance adjustment data"])
+            }
+            
+            let initialBalance = balances["initialBalance"] as? Double ?? 0.0
+            let finalBalance = balances["finalBalance"] as? Double ?? transaction.amount
+            let adjustmentAmount = balances["adjustmentAmount"] as? Double ?? (finalBalance - initialBalance)
+            let currency = balances["currency"] as? String ?? "CAD"
+            
+            // Get entityId from balances or fetch from BalanceAdjustments document
+            var entityId = balances["entityId"] as? String ?? ""
+            var entityTypeRaw = balances["entityType"] as? String ?? ""
+            
+            // If entityId is missing from balances, fetch from BalanceAdjustments document
+            if entityId.isEmpty {
+                print("   ⚠️ Entity ID missing from transaction data, fetching from BalanceAdjustments document...")
+                let adjustmentRef = db.collection("BalanceAdjustments").document(transaction.id)
+                let adjustmentDoc = try await adjustmentRef.getDocument()
+                
+                if adjustmentDoc.exists, let adjustmentData = adjustmentDoc.data() {
+                    entityId = adjustmentData["entityId"] as? String ?? ""
+                    entityTypeRaw = adjustmentData["entityType"] as? String ?? ""
+                    print("   ✅ Fetched entityId: \(entityId), entityType: \(entityTypeRaw)")
+                } else {
+                    throw NSError(domain: "BalanceAdjustmentError", code: 404,
+                                 userInfo: [NSLocalizedDescriptionKey: "Balance adjustment document not found"])
+                }
+            }
+            
+            // Validate entityId is not empty
+            guard !entityId.isEmpty else {
+                throw NSError(domain: "BalanceAdjustmentError", code: 400,
+                             userInfo: [NSLocalizedDescriptionKey: "Entity ID is empty"])
+            }
+            
+            // Validate transaction.id is not empty
+            guard !transaction.id.isEmpty else {
+                throw NSError(domain: "BalanceAdjustmentError", code: 400,
+                             userInfo: [NSLocalizedDescriptionKey: "Transaction ID is empty"])
+            }
+            
+            // Calculate reverse adjustment: if adjustment was positive (added), subtract it; if negative (subtracted), add it back
+            let reverseAdjustment = -adjustmentAmount
+            
+            print("📊 Balance adjustment details:")
+            print("   Transaction ID: \(transaction.id)")
+            print("   Entity ID: \(entityId)")
+            print("   Entity Type: \(entityTypeRaw)")
+            print("   Currency: \(currency)")
+            print("   Initial Balance: \(initialBalance)")
+            print("   Final Balance: \(finalBalance)")
+            print("   Adjustment Amount: \(adjustmentAmount)")
+            print("   Reverse Adjustment: \(reverseAdjustment) (will add/subtract from current balance)")
+            
+            // Use Firestore transaction for atomicity
+            try await db.runTransaction { firestoreTransaction, errorPointer in
+                do {
+                    // Step 1: Read current entity/balance document to get current balance
+                    let entityType = EntityType(rawValue: entityTypeRaw) ?? .customer
+                    let entityRef = db.collection(entityType.collectionName).document(entityId)
+                    let entityDoc = try firestoreTransaction.getDocument(entityRef)
+                    
+                    if currency == "CAD" {
+                        // Reverse CAD balance in entity collection
+                        if entityDoc.exists {
+                            let currentBalance = entityDoc.data()?["balance"] as? Double ?? 0.0
+                            let newBalance = currentBalance + reverseAdjustment
+                            
+                            print("   💰 Current CAD balance: \(currentBalance)")
+                            print("   🔄 Applying reverse adjustment: \(currentBalance) + \(reverseAdjustment) = \(newBalance)")
+                            
+                            firestoreTransaction.updateData([
+                                "balance": newBalance,
+                                "updatedAt": Timestamp()
+                            ], forDocument: entityRef)
+                            print("   ✅ Updated entity CAD balance to \(newBalance)")
+                        } else {
+                            print("   ⚠️ Entity document not found, cannot reverse balance")
+                            throw NSError(domain: "BalanceAdjustmentError", code: 404,
+                                         userInfo: [NSLocalizedDescriptionKey: "Entity document not found"])
+                        }
+                    } else {
+                        // Reverse currency balance in CurrencyBalances collection
+                        let currencyBalanceRef = db.collection("CurrencyBalances").document(entityId)
+                        let currencyBalanceDoc = try firestoreTransaction.getDocument(currencyBalanceRef)
+                        
+                        if currencyBalanceDoc.exists {
+                            let currentBalance = currencyBalanceDoc.data()?[currency] as? Double ?? 0.0
+                            let newBalance = currentBalance + reverseAdjustment
+                            
+                            print("   💰 Current \(currency) balance: \(currentBalance)")
+                            print("   🔄 Applying reverse adjustment: \(currentBalance) + \(reverseAdjustment) = \(newBalance)")
+                            
+                            firestoreTransaction.updateData([
+                                currency: newBalance,
+                                "updatedAt": Timestamp()
+                            ], forDocument: currencyBalanceRef)
+                            print("   ✅ Updated \(currency) balance to \(newBalance)")
+                        } else {
+                            // If document doesn't exist, create it with reversed amount
+                            let newBalance = reverseAdjustment
+                            firestoreTransaction.setData([
+                                currency: newBalance,
+                                "createdAt": Timestamp(),
+                                "updatedAt": Timestamp()
+                            ], forDocument: currencyBalanceRef)
+                            print("   ✅ Created \(currency) balance document with \(newBalance)")
+                        }
+                    }
+                    
+                    // Step 2: Delete the balance adjustment record
+                    let adjustmentRef = db.collection("BalanceAdjustments").document(self.transaction.id)
+                    firestoreTransaction.deleteDocument(adjustmentRef)
+                    print("   ✅ Marked balance adjustment record for deletion: \(self.transaction.id)")
+                    
+                } catch {
+                    errorPointer?.pointee = error as NSError
+                    return nil
+                }
+                return nil
+            }
+            
+            print("✅✅✅ Balance adjustment reversal completed successfully!")
         }
         
         print("✅✅✅ Transaction committed successfully! Transaction reversal completed!")
@@ -5010,4 +5645,6 @@ struct ScaleButtonStyle: ButtonStyle {
         )
     }
 }
+
+
 

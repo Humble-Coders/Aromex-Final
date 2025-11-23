@@ -40,6 +40,12 @@ struct HistoriesView: View {
     // Navigation state for bill screen
     @State private var selectedBillTransaction: (id: String, isSale: Bool)? = nil
     
+    // Ledger printing state
+    @State private var showingLedgerDateRangeDialog = false
+    @State private var ledgerStartDate: Date? = nil
+    @State private var ledgerEndDate: Date? = nil
+    @State private var showingLedgerScreen = false
+    
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     
@@ -418,6 +424,136 @@ struct HistoriesView: View {
         }
     }
     
+    // Get all entries for ledger (without date range filter or search filter, as date range will be applied in ledger generator)
+    // This gets ALL entries for the selected tab regardless of what's displayed on screen
+    private func getAllEntriesForLedger() -> [HistoryEntry] {
+        // Filter by tab only - ignore search text and date range filters
+        // Date range will be applied in LedgerGenerator
+        var filtered = historyEntries.filter { entry in
+            // Apply tab filter only - no search, no date range
+            if entry.transaction.type == .expense {
+                if !matchesTabFilter(entry) {
+                    return false
+                }
+            } else if entry.transaction.type == .purchase {
+                if !matchesTabFilter(entry) {
+                    return false
+                }
+            } else if entry.transaction.type == .sale {
+                if !matchesTabFilter(entry) {
+                    return false
+                }
+            } else if entry.transaction.type == .middleman {
+                if !matchesTabFilter(entry) {
+                    return false
+                }
+            } else {
+                if !selectedTab.matches(entry.transaction.type) {
+                    return false
+                }
+                if !matchesTabFilter(entry) {
+                    return false
+                }
+            }
+            return true
+        }
+        
+        // Deduplicate currency transactions in Cash and Bank tabs
+        if selectedTab == .currency || selectedTab == .bank {
+            filtered = deduplicateCurrencyTransactions(filtered)
+        }
+        
+        // For expenses, purchases, sales, and middleman in Cash/Bank/CreditCard tabs, adjust paid amount
+        if selectedTab == .currency || selectedTab == .bank || selectedTab == .creditCard {
+            filtered = filtered.map { entry in
+                guard entry.transaction.type == .expense || entry.transaction.type == .purchase || entry.transaction.type == .sale || entry.transaction.type == .middleman else {
+                    return entry
+                }
+                
+                var adjustedPaid: Double = 0.0
+                
+                if selectedTab == .currency {
+                    if entry.transaction.type == .expense {
+                        adjustedPaid = entry.transaction.cashPaid ?? 0.0
+                    } else if entry.transaction.type == .purchase {
+                        adjustedPaid = entry.transaction.cashPaid ?? 0.0
+                    } else if entry.transaction.type == .sale {
+                        adjustedPaid = entry.transaction.cashPaid ?? 0.0
+                    } else if entry.transaction.type == .middleman {
+                        adjustedPaid = entry.transaction.middlemanCash ?? 0.0
+                    }
+                } else if selectedTab == .bank {
+                    if entry.transaction.type == .expense {
+                        adjustedPaid = entry.transaction.bankPaid ?? 0.0
+                    } else if entry.transaction.type == .purchase {
+                        adjustedPaid = entry.transaction.bankPaid ?? 0.0
+                    } else if entry.transaction.type == .sale {
+                        adjustedPaid = entry.transaction.bankPaid ?? 0.0
+                    } else if entry.transaction.type == .middleman {
+                        adjustedPaid = entry.transaction.middlemanBank ?? 0.0
+                    }
+                } else if selectedTab == .creditCard {
+                    if entry.transaction.type == .purchase {
+                        adjustedPaid = entry.transaction.creditCardPaid ?? 0.0
+                    } else if entry.transaction.type == .sale {
+                        adjustedPaid = entry.transaction.creditCardPaid ?? 0.0
+                    } else if entry.transaction.type == .middleman {
+                        adjustedPaid = entry.transaction.middlemanCreditCard ?? 0.0
+                    }
+                } else {
+                    return entry
+                }
+                
+                let newTransaction = EntityTransaction(
+                    id: entry.transaction.id,
+                    type: entry.transaction.type,
+                    date: entry.transaction.date,
+                    amount: entry.transaction.amount,
+                    role: entry.transaction.role,
+                    orderNumber: entry.transaction.orderNumber,
+                    grandTotal: entry.transaction.grandTotal,
+                    paid: adjustedPaid,
+                    credit: entry.transaction.credit,
+                    gstAmount: entry.transaction.gstAmount,
+                    pstAmount: entry.transaction.pstAmount,
+                    notes: entry.transaction.notes,
+                    itemCount: entry.transaction.itemCount,
+                    cashPaid: entry.transaction.cashPaid,
+                    bankPaid: entry.transaction.bankPaid,
+                    creditCardPaid: entry.transaction.creditCardPaid,
+                    middlemanCash: entry.transaction.middlemanCash,
+                    middlemanBank: entry.transaction.middlemanBank,
+                    middlemanCreditCard: entry.transaction.middlemanCreditCard,
+                    middlemanCredit: entry.transaction.middlemanCredit,
+                    middlemanUnit: entry.transaction.middlemanUnit,
+                    middlemanName: entry.transaction.middlemanName,
+                    sourceCollection: entry.transaction.sourceCollection,
+                    currencyGiven: entry.transaction.currencyGiven,
+                    currencyName: entry.transaction.currencyName,
+                    giver: entry.transaction.giver,
+                    giverName: entry.transaction.giverName,
+                    taker: entry.transaction.taker,
+                    takerName: entry.transaction.takerName,
+                    isExchange: entry.transaction.isExchange,
+                    receivingCurrency: entry.transaction.receivingCurrency,
+                    receivedAmount: entry.transaction.receivedAmount,
+                    customExchangeRate: entry.transaction.customExchangeRate,
+                    balancesAfterTransaction: entry.transaction.balancesAfterTransaction
+                )
+                
+                return HistoryEntry(
+                    entityId: entry.entityId,
+                    entityName: entry.entityName,
+                    entityType: entry.entityType,
+                    transaction: newTransaction
+                )
+            }
+        }
+        
+        // Sort by date (oldest first for ledger)
+        return filtered.sorted { $0.transaction.date < $1.transaction.date }
+    }
+    
     // Get filtered entries without grouping
     private func getFilteredEntries() -> [HistoryEntry] {
         let hasSearch = !searchText.isEmpty
@@ -446,8 +582,19 @@ struct HistoriesView: View {
                 } else if entry.transaction.type == .middleman {
                     // Middleman transactions are handled by matchesTabFilter (which checks Middleman/Cash/Bank/CreditCard tabs)
                     if !matchesTabFilter(entry) {
+                        #if DEBUG
+                        print("❌ [getFilteredEntries] Middleman transaction filtered out by matchesTabFilter: \(entry.entityName), date: \(entry.transaction.date)")
+                        #endif
                         return false
                     }
+                    #if DEBUG
+                    if selectedTab == .currency || selectedTab == .bank || selectedTab == .creditCard {
+                        let cash = entry.transaction.middlemanCash ?? 0.0
+                        let bank = entry.transaction.middlemanBank ?? 0.0
+                        let creditCard = entry.transaction.middlemanCreditCard ?? 0.0
+                        print("✅ [getFilteredEntries] Middleman transaction passed tab filter: \(entry.entityName), cash: \(cash), bank: \(bank), creditCard: \(creditCard), date: \(entry.transaction.date), transactionId: \(entry.transaction.id)")
+                    }
+                    #endif
                 } else {
                     // For non-expense, non-purchase, non-sale, non-middleman transactions, check if transaction type matches tab
                     if !selectedTab.matches(entry.transaction.type) {
@@ -461,7 +608,22 @@ struct HistoriesView: View {
                 }
                 
                 // Apply date range filter
-                return dateInRange(entry.transaction.date)
+                let dateInRangeResult = dateInRange(entry.transaction.date)
+                #if DEBUG
+                if entry.transaction.type == .middleman && (selectedTab == .currency || selectedTab == .bank || selectedTab == .creditCard) {
+                    let dateFormatter = DateFormatter()
+                    dateFormatter.dateStyle = .short
+                    dateFormatter.timeStyle = .medium
+                    let startStr = startDate.map { dateFormatter.string(from: $0) } ?? "nil"
+                    let endStr = endDate.map { dateFormatter.string(from: $0) } ?? "nil"
+                    if dateInRangeResult {
+                        print("✅ [getFilteredEntries] Middleman transaction passed all filters (no search): \(entry.entityName), date: \(dateFormatter.string(from: entry.transaction.date)), startDate: \(startStr), endDate: \(endStr), hasCustomDateRange: \(hasCustomDateRange), transactionId: \(entry.transaction.id)")
+                    } else {
+                        print("❌ [getFilteredEntries] Middleman transaction filtered out by date range (no search): \(entry.entityName), transactionDate: \(dateFormatter.string(from: entry.transaction.date)), startDate: \(startStr), endDate: \(endStr), hasCustomDateRange: \(hasCustomDateRange), transactionId: \(entry.transaction.id)")
+                    }
+                }
+                #endif
+                return dateInRangeResult
             }
         } else {
             let searchLower = searchText.lowercased()
@@ -503,39 +665,103 @@ struct HistoriesView: View {
                 
                 // Date range filter - check if date is within selected range (check this early for performance)
                 if !dateInRange(entry.transaction.date) {
+                    #if DEBUG
+                    if entry.transaction.type == .middleman && (selectedTab == .currency || selectedTab == .bank || selectedTab == .creditCard) {
+                        let dateFormatter = DateFormatter()
+                        dateFormatter.dateStyle = .short
+                        dateFormatter.timeStyle = .medium
+                        let startStr = startDate.map { dateFormatter.string(from: $0) } ?? "nil"
+                        let endStr = endDate.map { dateFormatter.string(from: $0) } ?? "nil"
+                        print("❌ [getFilteredEntries] Middleman transaction filtered out by date range: \(entry.entityName), transactionDate: \(dateFormatter.string(from: entry.transaction.date)), startDate: \(startStr), endDate: \(endStr), hasCustomDateRange: \(hasCustomDateRange), transactionId: \(entry.transaction.id)")
+                    }
+                    #endif
                     return false
                 }
                 
+                #if DEBUG
+                if entry.transaction.type == .middleman && (selectedTab == .currency || selectedTab == .bank || selectedTab == .creditCard) {
+                    let dateFormatter = DateFormatter()
+                    dateFormatter.dateStyle = .short
+                    dateFormatter.timeStyle = .medium
+                    print("✅ [getFilteredEntries] Middleman transaction passed date range filter: \(entry.entityName), date: \(dateFormatter.string(from: entry.transaction.date)), transactionId: \(entry.transaction.id)")
+                }
+                #endif
+                
                 // Search filter (most expensive, do last)
+                // If search text is empty, all entries pass (empty string is contained in any string)
+                if searchLower.isEmpty {
+                    #if DEBUG
+                    if entry.transaction.type == .middleman && (selectedTab == .currency || selectedTab == .bank || selectedTab == .creditCard) {
+                        print("✅ [getFilteredEntries] Middleman transaction passed all filters (no search): \(entry.entityName), date: \(entry.transaction.date), transactionId: \(entry.transaction.id)")
+                    }
+                    #endif
+                    return true
+                }
+                
                 let entityNameLower = entry.entityName.lowercased()
                 if entityNameLower.contains(searchLower) {
+                    #if DEBUG
+                    if entry.transaction.type == .middleman && (selectedTab == .currency || selectedTab == .bank || selectedTab == .creditCard) {
+                        print("✅ [getFilteredEntries] Middleman transaction passed search filter (entity name match): \(entry.entityName), date: \(entry.transaction.date), transactionId: \(entry.transaction.id)")
+                    }
+                    #endif
                     return true
                 }
                 
                 if let notes = entry.transaction.notes, notes.lowercased().contains(searchLower) {
+                    #if DEBUG
+                    if entry.transaction.type == .middleman && (selectedTab == .currency || selectedTab == .bank || selectedTab == .creditCard) {
+                        print("✅ [getFilteredEntries] Middleman transaction passed search filter (notes match): \(entry.entityName), date: \(entry.transaction.date), transactionId: \(entry.transaction.id)")
+                    }
+                    #endif
                     return true
                 }
                 
                 if let orderNumber = entry.transaction.orderNumber,
                    String(orderNumber).contains(searchLower) {
+                    #if DEBUG
+                    if entry.transaction.type == .middleman && (selectedTab == .currency || selectedTab == .bank || selectedTab == .creditCard) {
+                        print("✅ [getFilteredEntries] Middleman transaction passed search filter (order number match): \(entry.entityName), date: \(entry.transaction.date), transactionId: \(entry.transaction.id)")
+                    }
+                    #endif
                     return true
                 }
                 
                 if let giverName = entry.transaction.giverName,
                    giverName.lowercased().contains(searchLower) {
+                    #if DEBUG
+                    if entry.transaction.type == .middleman && (selectedTab == .currency || selectedTab == .bank || selectedTab == .creditCard) {
+                        print("✅ [getFilteredEntries] Middleman transaction passed search filter (giver name match): \(entry.entityName), date: \(entry.transaction.date), transactionId: \(entry.transaction.id)")
+                    }
+                    #endif
                     return true
                 }
                 
                 if let takerName = entry.transaction.takerName,
                    takerName.lowercased().contains(searchLower) {
+                    #if DEBUG
+                    if entry.transaction.type == .middleman && (selectedTab == .currency || selectedTab == .bank || selectedTab == .creditCard) {
+                        print("✅ [getFilteredEntries] Middleman transaction passed search filter (taker name match): \(entry.entityName), date: \(entry.transaction.date), transactionId: \(entry.transaction.id)")
+                    }
+                    #endif
                     return true
                 }
                 
                 if let middlemanName = entry.transaction.middlemanName,
                    middlemanName.lowercased().contains(searchLower) {
+                    #if DEBUG
+                    if entry.transaction.type == .middleman && (selectedTab == .currency || selectedTab == .bank || selectedTab == .creditCard) {
+                        print("✅ [getFilteredEntries] Middleman transaction passed search filter (middleman name match): \(entry.entityName), date: \(entry.transaction.date), transactionId: \(entry.transaction.id)")
+                    }
+                    #endif
                     return true
                 }
                 
+                #if DEBUG
+                if entry.transaction.type == .middleman && (selectedTab == .currency || selectedTab == .bank || selectedTab == .creditCard) {
+                    print("❌ [getFilteredEntries] Middleman transaction filtered out by search filter: \(entry.entityName), searchText: '\(searchText)', date: \(entry.transaction.date), transactionId: \(entry.transaction.id)")
+                }
+                #endif
                 return false
             }
         }
@@ -544,9 +770,25 @@ struct HistoriesView: View {
         // If neither giver nor taker is myself (for Cash) or if it's a Bank transaction,
         // the same transaction appears twice (once for giver entity, once for taker entity)
         // Combine them into one entry with "giverName -> takerName" format
+        #if DEBUG
+        let beforeDedupCount = filtered.count
+        let middlemanBeforeDedup = filtered.filter { $0.transaction.type == .middleman && $0.transaction.id == "Mb6tucUKI09crWRdPwJk" }
+        if !middlemanBeforeDedup.isEmpty {
+            print("🔵 [getFilteredEntries] Middleman transaction BEFORE deduplication: \(middlemanBeforeDedup[0].entityName), date: \(middlemanBeforeDedup[0].transaction.date), transactionId: \(middlemanBeforeDedup[0].transaction.id)")
+        }
+        #endif
         if selectedTab == .currency || selectedTab == .bank {
             filtered = deduplicateCurrencyTransactions(filtered)
         }
+        #if DEBUG
+        let afterDedupCount = filtered.count
+        let middlemanAfterDedup = filtered.filter { $0.transaction.type == .middleman && $0.transaction.id == "Mb6tucUKI09crWRdPwJk" }
+        if !middlemanAfterDedup.isEmpty {
+            print("🔵 [getFilteredEntries] Middleman transaction AFTER deduplication: \(middlemanAfterDedup[0].entityName), date: \(middlemanAfterDedup[0].transaction.date), transactionId: \(middlemanAfterDedup[0].transaction.id)")
+        } else if !middlemanBeforeDedup.isEmpty {
+            print("❌ [getFilteredEntries] Middleman transaction REMOVED by deduplication: transactionId: Mb6tucUKI09crWRdPwJk, beforeCount: \(beforeDedupCount), afterCount: \(afterDedupCount)")
+        }
+        #endif
         
         // For expenses, purchases, sales, and middleman in Cash/Bank/CreditCard tabs, adjust ONLY the paid amount based on the tab
         // Total amount and payment methods remain unchanged (show all real values)
@@ -570,6 +812,9 @@ struct HistoriesView: View {
                         adjustedPaid = entry.transaction.cashPaid ?? 0.0
                     } else if entry.transaction.type == .middleman {
                         adjustedPaid = entry.transaction.middlemanCash ?? 0.0
+                        #if DEBUG
+                        print("✅ [getFilteredEntries] Adjusting middleman transaction for Cash tab: \(entry.entityName), middlemanCash: \(entry.transaction.middlemanCash ?? 0.0), adjustedPaid: \(adjustedPaid), date: \(entry.transaction.date), transactionId: \(entry.transaction.id)")
+                        #endif
                     }
                 } else if selectedTab == .bank {
                     // Bank tab: Paid should show only bank amount
@@ -581,6 +826,9 @@ struct HistoriesView: View {
                         adjustedPaid = entry.transaction.bankPaid ?? 0.0
                     } else if entry.transaction.type == .middleman {
                         adjustedPaid = entry.transaction.middlemanBank ?? 0.0
+                        #if DEBUG
+                        print("✅ [getFilteredEntries] Adjusting middleman transaction for Bank tab: \(entry.entityName), middlemanBank: \(entry.transaction.middlemanBank ?? 0.0), adjustedPaid: \(adjustedPaid), date: \(entry.transaction.date), transactionId: \(entry.transaction.id)")
+                        #endif
                     }
                 } else if selectedTab == .creditCard {
                     // Credit Card tab: Paid should show only credit card amount
@@ -590,6 +838,9 @@ struct HistoriesView: View {
                         adjustedPaid = entry.transaction.creditCardPaid ?? 0.0
                     } else if entry.transaction.type == .middleman {
                         adjustedPaid = entry.transaction.middlemanCreditCard ?? 0.0
+                        #if DEBUG
+                        print("✅ [getFilteredEntries] Adjusting middleman transaction for Credit Card tab: \(entry.entityName), middlemanCreditCard: \(entry.transaction.middlemanCreditCard ?? 0.0), adjustedPaid: \(adjustedPaid), date: \(entry.transaction.date), transactionId: \(entry.transaction.id)")
+                        #endif
                     }
                 } else {
                     // Expense/Purchase/Sale/Middleman tab: Paid should show total paid (cash + bank + credit card)
@@ -757,6 +1008,9 @@ struct HistoriesView: View {
         
         // Handle middleman transactions in Cash/Bank/CreditCard tabs
         if entry.transaction.type == .middleman {
+            #if DEBUG
+            print("🔵 [matchesTabFilter] Middleman transaction found: \(entry.entityName), middlemanCash: \(entry.transaction.middlemanCash ?? 0), middlemanBank: \(entry.transaction.middlemanBank ?? 0), middlemanCreditCard: \(entry.transaction.middlemanCreditCard ?? 0), selectedTab: \(selectedTab)")
+            #endif
             // Cash tab: show middleman transactions that have cash payment > 0
             if selectedTab == .currency {
                 let result = (entry.transaction.middlemanCash ?? 0) > 0
@@ -828,6 +1082,20 @@ struct HistoriesView: View {
         for (transactionId, entriesWithSameId) in groupedByTransactionId {
             // Skip if already processed
             if processedTransactionIds.contains(transactionId) {
+                continue
+            }
+            
+            // CRITICAL: Preserve middleman, purchase, sale, and expense transactions - only deduplicate currency transactions
+            let firstEntry = entriesWithSameId.first!
+            if firstEntry.transaction.type == .middleman || 
+               firstEntry.transaction.type == .purchase || 
+               firstEntry.transaction.type == .sale || 
+               firstEntry.transaction.type == .expense {
+                // For non-currency transactions, just add all entries (they shouldn't be duplicated anyway)
+                for entry in entriesWithSameId {
+                    deduplicated.append(entry)
+                }
+                processedTransactionIds.insert(transactionId)
                 continue
             }
             
@@ -943,25 +1211,28 @@ struct HistoriesView: View {
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            headerView
-                .padding(.horizontal, isCompact ? 16 : 24)
-                .padding(.top, isCompact ? 16 : 24)
-            
-            // Tab Bar
-            tabBar
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                headerView
+                    .padding(.horizontal, isCompact ? 16 : 24)
+                    .padding(.top, isCompact ? 16 : 24)
+                
+                // Tab Bar
+                tabBar
+                    .padding(.horizontal, isCompact ? 16 : 24)
+                    .padding(.top, 16)
+                
+                // Filters and Content
+                VStack(alignment: .leading, spacing: 16) {
+                    filtersSection
+                    contentSection
+                }
                 .padding(.horizontal, isCompact ? 16 : 24)
                 .padding(.top, 16)
-            
-            // Filters and Content
-            VStack(alignment: .leading, spacing: 16) {
-                filtersSection
-                contentSection
+                .padding(.bottom, 16)
             }
-            .padding(.horizontal, isCompact ? 16 : 24)
-            .padding(.top, 16)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.systemGroupedBackground.ignoresSafeArea())
         #if os(iOS)
         .navigationDestination(isPresented: Binding(
@@ -982,6 +1253,65 @@ struct HistoriesView: View {
                 )
             }
         }
+        .sheet(isPresented: $showingLedgerDateRangeDialog) {
+            LedgerDateRangeDialog(
+                startDate: $ledgerStartDate,
+                endDate: $ledgerEndDate,
+                onCancel: {
+                    showingLedgerDateRangeDialog = false
+                    ledgerStartDate = nil
+                    ledgerEndDate = nil
+                },
+                onGenerate: {
+                    showingLedgerDateRangeDialog = false
+                    showingLedgerScreen = true
+                }
+            )
+        }
+        .navigationDestination(isPresented: $showingLedgerScreen) {
+            HistoriesLedgerScreen(
+                tabName: selectedTab.displayName,
+                entries: getAllEntriesForLedger(),
+                startDate: ledgerStartDate,
+                endDate: ledgerEndDate,
+                onClose: {
+                    showingLedgerScreen = false
+                }
+            )
+            .navigationBarBackButtonHidden(true)
+        }
+        #else
+        .sheet(isPresented: $showingLedgerDateRangeDialog) {
+            LedgerDateRangeDialog(
+                startDate: $ledgerStartDate,
+                endDate: $ledgerEndDate,
+                onCancel: {
+                    showingLedgerDateRangeDialog = false
+                    ledgerStartDate = nil
+                    ledgerEndDate = nil
+                },
+                onGenerate: {
+                    showingLedgerDateRangeDialog = false
+                    showingLedgerScreen = true
+                }
+            )
+        }
+        .background(
+            NavigationLink(
+                destination: HistoriesLedgerScreen(
+                    tabName: selectedTab.displayName,
+                    entries: getAllEntriesForLedger(),
+                    startDate: ledgerStartDate,
+                    endDate: ledgerEndDate,
+                    onClose: {
+                        showingLedgerScreen = false
+                    }
+                ),
+                isActive: $showingLedgerScreen,
+                label: { EmptyView() }
+            )
+            .hidden()
+        )
         #endif
         .task {
             #if DEBUG
@@ -1026,7 +1356,7 @@ struct HistoriesView: View {
     }
     
     private var headerView: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Image(systemName: "clock.arrow.circlepath")
                     .font(.system(size: isCompact ? 22 : 28, weight: .semibold))
@@ -1034,6 +1364,28 @@ struct HistoriesView: View {
                 Text("Transaction Histories")
                     .font(.system(size: isCompact ? 24 : 28, weight: .bold))
                     .foregroundColor(.primary)
+                
+                Spacer()
+                
+                // Print Ledger Button
+                Button(action: {
+                    showingLedgerDateRangeDialog = true
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "printer.fill")
+                            .font(.system(size: isCompact ? 11 : 12, weight: .semibold))
+                        Text("Print Ledger")
+                            .font(.system(size: isCompact ? 11 : 12, weight: .semibold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, isCompact ? 10 : 12)
+                    .padding(.vertical, isCompact ? 7 : 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color(red: 0.25, green: 0.33, blue: 0.54))
+                    )
+                }
+                .buttonStyle(PlainButtonStyle())
             }
             
             Text("Unified view of purchases, sales, middleman and currency transactions across every customer, middleman and supplier.")
@@ -1396,91 +1748,89 @@ struct HistoriesView: View {
     }
     
     private var transactionsListView: some View {
-        // Use ScrollView for both platforms for now to ensure visibility
-        ScrollView {
-            LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                // CRITICAL: Use displayableGroupedCache instead of groupedCache directly
-                // This ensures we only show dates that are in loadedDates
-                ForEach(Array(displayableGroupedCache.enumerated()), id: \.element.date) { index, group in
-                    Section {
-                        VStack(spacing: isCompact ? 12 : 12) {
-                            ForEach(Array(group.entries.enumerated()), id: \.element.id) { entryIndex, entry in
-                                OptimizedHistoryRowView(
-                                    entry: entry,
-                                    selectedTab: selectedTab,
-                                    onViewBill: handleViewBill,
-                                    onTransactionDeleted: { deletedId in
-                                        // Remove the deleted transaction from the local list
-                                        withAnimation {
-                                            historyEntries.removeAll { $0.id == deletedId }
-                                        }
-                                        // Update the grouped cache to reflect the deletion
-                                        updateGroupedCache(resetLoadedDates: false)
+        // Removed ScrollView wrapper - now part of main scroll view
+        LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+            // CRITICAL: Use displayableGroupedCache instead of groupedCache directly
+            // This ensures we only show dates that are in loadedDates
+            ForEach(Array(displayableGroupedCache.enumerated()), id: \.element.date) { index, group in
+                Section {
+                    VStack(spacing: isCompact ? 12 : 12) {
+                        ForEach(Array(group.entries.enumerated()), id: \.element.id) { entryIndex, entry in
+                            OptimizedHistoryRowView(
+                                entry: entry,
+                                selectedTab: selectedTab,
+                                onViewBill: handleViewBill,
+                                onTransactionDeleted: { deletedId in
+                                    // Remove the deleted transaction from the local list
+                                    withAnimation {
+                                        historyEntries.removeAll { $0.id == deletedId }
                                     }
-                                )
-                                // Removed onAppear trigger here - using footer trigger instead
-                                // This prevents multiple triggers and ensures we only load when user scrolls to footer
-                            }
-                        }
-                        .padding(.horizontal, isCompact ? 16 : 20)
-                        .padding(.bottom, 24)
-                        .padding(.top, isCompact ? 8 : 0)
-                        
-                        // Show loading indicator or trigger at the end
-                        // CRITICAL: Only show footer if there are more dates to load
-                        // This prevents the footer from appearing on initial load when only 1 date is loaded
-                        if index == displayableGroupedCache.count - 1 && allAvailableDates.count > loadedDates.count {
-                            // Show a simple "Load More" button instead of auto-triggering
-                            // This gives the user control and prevents immediate loading on initial render
-                            VStack(spacing: 12) {
-                                if isLoadingMoreDays {
-                                    HStack {
-                                        ProgressView()
-                                            .scaleEffect(0.8)
-                                        Text("Loading previous day...")
-                                            .font(.system(size: 13))
-                                            .foregroundColor(.secondary)
-                                    }
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 16)
-                                } else {
-                                    // Show manual load button
-                                    VStack(spacing: 8) {
-                                        Text("\(allAvailableDates.count - loadedDates.count) more day\(allAvailableDates.count - loadedDates.count == 1 ? "" : "s") available")
-                                            .font(.system(size: 12))
-                                            .foregroundColor(.secondary)
-                                        Button(action: {
-                                            loadNextDay()
-                                        }) {
-                                            Text("Load Previous Day")
-                                                .font(.system(size: 13, weight: .semibold))
-                                                .foregroundColor(.blue)
-                                                .padding(.horizontal, 16)
-                                                .padding(.vertical, 8)
-                                                .background(Color.blue.opacity(0.1))
-                                                .cornerRadius(8)
-                                        }
-                                        .buttonStyle(PlainButtonStyle())
-                                    }
-                                    .padding(.vertical, 12)
+                                    // Update the grouped cache to reflect the deletion
+                                    updateGroupedCache(resetLoadedDates: false)
                                 }
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.horizontal, 20)
-                        } else if index == displayableGroupedCache.count - 1 && !allAvailableDates.isEmpty && allAvailableDates.count == loadedDates.count {
-                            // All dates loaded
-                            VStack {
-                                Text("All transactions loaded")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.secondary.opacity(0.7))
-                                    .padding(.vertical, 8)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.horizontal, 20)
+                            )
+                            // Removed onAppear trigger here - using footer trigger instead
+                            // This prevents multiple triggers and ensures we only load when user scrolls to footer
                         }
-                    } header: {
-                        DateHeaderView(date: group.date, count: group.entries.count)
                     }
+                    .padding(.horizontal, isCompact ? 16 : 20)
+                    .padding(.bottom, 24)
+                    .padding(.top, isCompact ? 8 : 0)
+                    
+                    // Show loading indicator or trigger at the end
+                    // CRITICAL: Only show footer if there are more dates to load
+                    // This prevents the footer from appearing on initial load when only 1 date is loaded
+                    if index == displayableGroupedCache.count - 1 && allAvailableDates.count > loadedDates.count {
+                        // Show a simple "Load More" button instead of auto-triggering
+                        // This gives the user control and prevents immediate loading on initial render
+                        VStack(spacing: 12) {
+                            if isLoadingMoreDays {
+                                HStack {
+                                    ProgressView()
+                                        .scaleEffect(0.8)
+                                    Text("Loading previous day...")
+                                        .font(.system(size: 13))
+                                        .foregroundColor(.secondary)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 16)
+                            } else {
+                                // Show manual load button
+                                VStack(spacing: 8) {
+                                    Text("\(allAvailableDates.count - loadedDates.count) more day\(allAvailableDates.count - loadedDates.count == 1 ? "" : "s") available")
+                                        .font(.system(size: 12))
+                                        .foregroundColor(.secondary)
+                                    Button(action: {
+                                        loadNextDay()
+                                    }) {
+                                        Text("Load Previous Day")
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundColor(.blue)
+                                            .padding(.horizontal, 16)
+                                            .padding(.vertical, 8)
+                                            .background(Color.blue.opacity(0.1))
+                                            .cornerRadius(8)
+                                    }
+                                    .buttonStyle(PlainButtonStyle())
+                                }
+                                .padding(.vertical, 12)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, 20)
+                    } else if index == displayableGroupedCache.count - 1 && !allAvailableDates.isEmpty && allAvailableDates.count == loadedDates.count {
+                        // All dates loaded
+                        VStack {
+                            Text("All transactions loaded")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary.opacity(0.7))
+                                .padding(.vertical, 8)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, 20)
+                    }
+                } header: {
+                    DateHeaderView(date: group.date, count: group.entries.count)
                 }
             }
         }
@@ -2121,14 +2471,41 @@ private struct EntityTransactionRowContentView: View {
     private var compactCurrencyAmountDisplay: some View {
         // In cash/bank tabs, use dollar format instead of showing CAD
         // Positive: $45, Negative: -$45
-        let isPositive = getPaidColor() == .green
+        // Special case: In cash/bank tab, if neither giver nor taker is myself, show no sign and grey color
+        let giver = transaction.giver ?? ""
+        let taker = transaction.taker ?? ""
+        let giverIsMyself = giver == "myself_special_id" || giver == "myself_bank_special_id"
+        let takerIsMyself = taker == "myself_special_id" || taker == "myself_bank_special_id"
+        let isCashOrBankTab = selectedTab == .currency || selectedTab == .bank
+        
         let formattedAmount: String
-        if isPositive {
+        let color: Color
+        
+        // Special case: In cash/bank tab, if neither giver nor taker is myself, show no sign and grey
+        if isCashOrBankTab && !giverIsMyself && !takerIsMyself {
+            // Neither is myself in cash/bank tab: no sign, grey color
             formattedAmount = formatCurrency(transaction.amount)
-        } else {
+            color = .gray
+        } else if takerIsMyself {
+            // Taker is myself: money coming in, positive sign, green
+            formattedAmount = formatCurrency(transaction.amount)
+            color = .green
+        } else if giverIsMyself {
+            // Giver is myself: money going out, negative sign, red
             formattedAmount = "-" + formatCurrency(abs(transaction.amount))
+            color = .red
+        } else {
+            // Neither is myself (and not in cash/bank tab): use getPaidColor (returns orange)
+            let paidColor = getPaidColor()
+            let isPositive = paidColor == .green
+            if isPositive {
+                formattedAmount = formatCurrency(transaction.amount)
+            } else {
+                formattedAmount = "-" + formatCurrency(abs(transaction.amount))
+            }
+            color = paidColor
         }
-        let color = getPaidColor()
+        
         return compactAmountText(text: formattedAmount, color: color, hasBackground: true)
     }
     
@@ -2413,15 +2790,30 @@ private struct EntityTransactionRowContentView: View {
             }
             return .orange
         case .currencyRegular, .currencyExchange:
+            // Special case: In cash/bank tab, if neither giver nor taker is myself, return grey
             let taker = transaction.taker ?? ""
             let giver = transaction.giver ?? ""
-            if taker == "myself_special_id" || taker == "myself_bank_special_id" {
+            let giverIsMyself = giver == "myself_special_id" || giver == "myself_bank_special_id"
+            let takerIsMyself = taker == "myself_special_id" || taker == "myself_bank_special_id"
+            
+            if (selectedTab == .currency || selectedTab == .bank) && !giverIsMyself && !takerIsMyself {
+                return .gray
+            }
+            
+            if takerIsMyself {
                 return .green
-            } else if giver == "myself_special_id" || giver == "myself_bank_special_id" {
+            } else if giverIsMyself {
                 return .red
             } else {
                 return .orange
             }
+        case .balanceAdjustment:
+            // Balance adjustments: green if To Receive, red if To Give
+            if let balances = transaction.balancesAfterTransaction,
+               let adjustmentType = balances["adjustmentType"] as? String {
+                return adjustmentType == "To Receive" ? .green : .red
+            }
+            return .indigo
         }
     }
     
@@ -2474,6 +2866,7 @@ private struct OptimizedHistoryRowView: View {
         case .middleman: self.historyType = .middleman
         case .currencyRegular, .currencyExchange: self.historyType = .currency
         case .expense: self.historyType = .expense
+        case .balanceAdjustment: self.historyType = .currency
         }
         
         // Show Purchase/Sale/Middleman badge if purchase, sale, or middleman appears in Cash/Bank/CreditCard tabs
@@ -2642,7 +3035,23 @@ private struct OptimizedHistoryRowView: View {
                 
                 // Show the main transaction type badge (Cash/Bank/CreditCard for purchases in those tabs)
                 if showPurchaseBadge {
-                    // For purchases in Cash/Bank/CreditCard tabs, show the tab badge
+                    // For purchases in Cash/Bank/CreditCard tabs, show the tab badge (always use selectedTab, not historyType)
+                    HStack(spacing: 4) {
+                        Image(systemName: selectedTab.icon)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(selectedTab.color)
+                        Text(selectedTab.displayName)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(selectedTab.color)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(selectedTab.color.opacity(0.12))
+                            .cornerRadius(8)
+                    }
+                } else if selectedTab == .currency || selectedTab == .bank || selectedTab == .creditCard {
+                    // For currency transactions in Cash/Bank/CreditCard tabs, also show the tab badge
                     HStack(spacing: 4) {
                         Image(systemName: selectedTab.icon)
                             .font(.system(size: 12, weight: .medium))
@@ -3259,6 +3668,13 @@ private struct TransactionDetailSheetView: View {
             if taker == "myself_special_id" || taker == "myself_bank_special_id" { return .green }
             else if giver == "myself_special_id" || giver == "myself_bank_special_id" { return .red }
             else { return .orange }
+        case .balanceAdjustment:
+            // Balance adjustments: green if To Receive, red if To Give
+            if let balances = transaction.balancesAfterTransaction,
+               let adjustmentType = balances["adjustmentType"] as? String {
+                return adjustmentType == "To Receive" ? .green : .red
+            }
+            return .indigo
         }
     }
     

@@ -17,6 +17,7 @@ struct EditEntityDialog: View {
     let editingEntity: EntityProfile
     let onSave: (EntityProfile) -> Void
     let onDismiss: (() -> Void)?
+    let allowBalanceEditing: Bool
     
     @State private var name: String = ""
     @State private var initialBalance: String = ""
@@ -32,6 +33,22 @@ struct EditEntityDialog: View {
     @FocusState private var focusedField: FieldType?
     @Environment(\.horizontalSizeClass) var horizontalSizeClass
     @Environment(\.verticalSizeClass) var verticalSizeClass
+    
+    init(
+        isPresented: Binding<Bool>,
+        entityType: EntityType,
+        editingEntity: EntityProfile,
+        onSave: @escaping (EntityProfile) -> Void,
+        onDismiss: (() -> Void)? = nil,
+        allowBalanceEditing: Bool = true
+    ) {
+        self._isPresented = isPresented
+        self.entityType = entityType
+        self.editingEntity = editingEntity
+        self.onSave = onSave
+        self.onDismiss = onDismiss
+        self.allowBalanceEditing = allowBalanceEditing
+    }
     
     enum BalanceType: String, CaseIterable {
         case toReceive = "To Receive"
@@ -259,6 +276,8 @@ struct EditEntityDialog: View {
                     .font(.system(size: 18, weight: .medium))
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
+                    .disabled(!allowBalanceEditing)
+                    .opacity(allowBalanceEditing ? 1.0 : 0.6)
                     .onChange(of: initialBalance) { newValue in
                         // Ensure the balance reflects the selected type
                         updateBalanceForType()
@@ -282,6 +301,7 @@ struct EditEntityDialog: View {
                                 )
                         }
                         .buttonStyle(PlainButtonStyle())
+                        .disabled(!allowBalanceEditing)
                     }
                 }
                 .padding(.trailing, 8)
@@ -309,6 +329,8 @@ struct EditEntityDialog: View {
                     .font(.system(size: 18, weight: .medium))
                     .padding(.horizontal, 20)
                     .padding(.vertical, 16)
+                    .disabled(!allowBalanceEditing)
+                    .opacity(allowBalanceEditing ? 1.0 : 0.6)
                     .onChange(of: initialBalance) { newValue in
                         updateBalanceForType()
                     }
@@ -331,6 +353,7 @@ struct EditEntityDialog: View {
                                 )
                         }
                         .buttonStyle(PlainButtonStyle())
+                        .disabled(!allowBalanceEditing)
                     }
                 }
                 .padding(.trailing, 12)
@@ -915,14 +938,18 @@ struct EditEntityDialog: View {
         isUpdating = true
         
         // Parse the balance and ensure it reflects the selected type
-        var balance = Double(initialBalance) ?? 0.0
-        
-        // Apply the balance type logic
-        switch balanceType {
-        case .toReceive:
-            balance = abs(balance) // Ensure positive
-        case .toGive:
-            balance = -abs(balance) // Ensure negative
+        // If balance editing is disabled, keep the original balance
+        var balance = editingEntity.balance
+        if allowBalanceEditing {
+            balance = Double(initialBalance) ?? 0.0
+            
+            // Apply the balance type logic
+            switch balanceType {
+            case .toReceive:
+                balance = abs(balance) // Ensure positive
+            case .toGive:
+                balance = -abs(balance) // Ensure negative
+            }
         }
         
         // Create updated entity data for Firestore
@@ -1004,20 +1031,3 @@ struct EditEntityDialog: View {
     }
 }
 
-#Preview {
-    EditEntityDialog(
-        isPresented: .constant(true),
-        entityType: .customer,
-        editingEntity: EntityProfile(
-            id: "preview",
-            name: "John Doe",
-            phone: "+1 234-567-8900",
-            email: "john@example.com",
-            balance: 1500.0,
-            address: "123 Main St",
-            notes: "Preview notes"
-        ),
-        onSave: { _ in },
-        onDismiss: nil
-    )
-}
